@@ -51,6 +51,10 @@ def readData():
   test = pd.read_csv('test.csv', index_col = 'ImageId')
 
   return train, test
+<<<<<<< HEAD
+=======
+ 
+>>>>>>> d97c6c277ced5d818e3fa2f2337abe8f7810146a
   
   
 def plot(data, num):
