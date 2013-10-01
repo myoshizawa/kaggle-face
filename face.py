@@ -5,6 +5,11 @@ import matplotlib.cm as cm
 import math
 
 """
+ 10.1.2013 9:20am - Decided not to combine x,y coordinate columns into a single column of tuples
+                    Added more comments
+
+"""
+"""
 Original Columns Names
 left_eye_center_x, left_eye_center_y
 right_eye_center_x, right_eye_center_y
@@ -39,36 +44,34 @@ keypoints = ['left_eye_center', 'right_eye_center',
 def readData():
   """
   Reads .csv file and outputs DataFrame containing information
-  For training.csv, joins x and y coordinates into tuple
+  pandas automatically converts keypoint data into floats, but 'Image' left as a string
   """
   
+  # reads training.csv into DataFrame train
   train = pd.read_csv('training.csv')
-  # converts x and y coordinates corresponding to same feature into tuple
-  for item in keypoints:
-    train[item] = train[[item + '_x', item + '_y']].apply(tuple, axis=1)
-  train = train[keypoints + ['Image']]
   
+  # reads test.csv into DataFrame test, where index is set to column 'ImageId' (otherwise index and column 'ImageId' are repetitive)
   test = pd.read_csv('test.csv', index_col = 'ImageId')
 
   return train, test
-<<<<<<< HEAD
-=======
- 
->>>>>>> d97c6c277ced5d818e3fa2f2337abe8f7810146a
   
   
 def plot(data, num):
   """
   Prints image according to entry num and also facial keypoints if from training data
   """
+  # converts 'Image' string into 96x96 numpy array
   gray_vals = np.array(data.ix[num, 'Image'].split(' '))
   gray_vals = gray_vals.astype('int64')
   gray_vals = gray_vals.reshape((96, 96))
+  
+  # matplotlib gray-scale pyplot 
   plt.imshow(gray_vals, cmap=cm.Greys_r)
   
+  # if data contains keypoints, plot keypoints
   for item in keypoints:
-    if item in data.columns:
-      if data[item][num][0] and data[item][num][1]:
-        plt.scatter(data[item][num][0], data[item][num][1])
+    if item + '_x' in data.columns and item + '_y' in data.columns:
+      if data[item + '_x'][num] and data[item + '_y'][num]:
+        plt.scatter(data[item + '_x'][num], data[item + '_y'][num])
   
   plt.show()
