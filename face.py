@@ -23,6 +23,7 @@ mouth_center_bottom_lip_x, mouth_center_bottom_lip_y
 Image
 """
 
+# keypoints is a list of the 15 facial keypoint features provided in the training data
 keypoints = ['left_eye_center', 'right_eye_center', 
               'left_eye_inner_corner', 'left_eye_outer_corner',
               'right_eye_inner_corner', 'right_eye_outer_corner',
@@ -34,19 +35,28 @@ keypoints = ['left_eye_center', 'right_eye_center',
 
               
               
-def read(filename):
-  data = pd.read_csv(filename)
+def readData():
+  """
+  Reads .csv file and outputs DataFrame containing information
+  For training.csv, joins x and y coordinates into tuple
+  """
   
+  train = pd.read_csv('training.csv')
+  # converts x and y coordinates corresponding to same feature into tuple
   for item in keypoints:
-    data[item] = data[[item + '_x', item + '_y']].apply(tuple, axis=1)
+    train[item] = train[[item + '_x', item + '_y']].apply(tuple, axis=1)
+  train = train[keypoints + ['Image']]
   
-  data = data[keypoints + ['Image']]
-  
-  return data
+  test = pd.read_csv('test.csv', index_col = 'ImageId')
+
+  return train, test
  
   
   
 def plot(data, num):
+  """
+  Prints image according to entry num and also facial keypoints if from training data
+  """
   gray_vals = np.array(data.ix[num, 'Image'].split(' '))
   gray_vals = gray_vals.astype('int64')
   gray_vals = gray_vals.reshape((96, 96))
