@@ -1,13 +1,19 @@
 import numpy as np
 import pandas as pd
+from pandas import Series, DataFrame
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import csv
 import math
+import itertools
 
 """
- 10.1.2013 9:20am - Decided not to combine x,y coordinate columns into a single column of tuples
-                    Added more comments
+  10.1.2013 9:20am - Decided not to combine x,y coordinate columns into a single column of tuples
+                     Added more comments
 
+  10.3.2013 1:00pm - Replaced readData() with readTrain() and readTest() that save each Image as a 96x96 numpy array during file reading
+                     However, the training DataFrame takes up a decent chunk of memory so I recommend you don't load the whole thing until you need to
+                     Modified (now named) plotImage() to accomodate above changes
 """
 """
 Original Columns Names
@@ -39,34 +45,69 @@ keypoints = ['left_eye_center', 'right_eye_center',
               'mouth_left_corner', 'mouth_right_corner',
               'mouth_center_top_lip', 'mouth_center_bottom_lip']
 
-              
-              
-def readData():
+               
+def readTrain(numRows = float('inf')):
   """
-  Reads .csv file and outputs DataFrame containing information
-  pandas automatically converts keypoint data into floats, but 'Image' left as a string
+  Loads the first numRows rows of training data from the .csv file into a pandas DataFrame, converts Image into 96x96 numpy array
   """
+  image_list = []
+  first_row = True
+  countRows = 0
   
-  # reads training.csv into DataFrame train
-  train = pd.read_csv('training.csv')
+  with open('training.csv', 'rb') as csvfile:
+    reader = csv.reader(csvfile, delimiter=',')
+    
+    for row in reader:
+      if first_row:
+        first_row = False
+        continue
+      if countRows == numRows:
+        break
+      column_num = 0
+      row_dict = {}
+      for item in keypoints:
+        if not row[column_num] and not row[column_num+1]:
+          row_dict[item + '_x'] = float('nan')
+          row_dict[item + '_y'] = float('nan')
+        else:
+          row_dict[item + '_x'] = float(row[column_num])
+          row_dict[item + '_y'] = float(row[column_num+1])
+        column_num += 2
+      
+      row_dict['Image'] = np.array([int(float(x)) for x in row[30].split(' ')]).reshape(96,96)
+      
+      image_list.append(row_dict)
+      countRows += 1
+      
+  return DataFrame(image_list)
   
-  # reads test.csv into DataFrame test, where index is set to column 'ImageId' (otherwise index and column 'ImageId' are repetitive)
-  test = pd.read_csv('test.csv', index_col = 'ImageId')
+def readTest():
+  """
+  Loads the test data from .csv into a pandas DataFrame, converts Image into 96x96 numpy array 
+  """
 
-  return train, test
+  image_list = []
+  first_row = True
+  
+  with open('test.csv', 'rb') as csvfile:
+    reader = csv.reader(csvfile, delimiter=',')
+    
+    for row in reader:
+      if first_row:
+        first_row = False
+        continue
+      row_dict['Image'] = np.array([int(float(x)) for x in row[1].split(' ')]).reshape(96,96)
+      image_list.append(row_dict)
+      
+  return DataFrame(image_list)
   
   
-def plot(data, num):
+def plotImage(data, num):
   """
   Prints image according to entry num and also facial keypoints if from training data
   """
-  # converts 'Image' string into 96x96 numpy array
-  gray_vals = np.array(data.ix[num, 'Image'].split(' '))
-  gray_vals = gray_vals.astype('int64')
-  gray_vals = gray_vals.reshape((96, 96))
-  
   # matplotlib gray-scale pyplot 
-  plt.imshow(gray_vals, cmap=cm.Greys_r)
+  plt.imshow(data.ix[num,'Image'], cmap=cm.Greys_r)
   
   # if data contains keypoints, plot keypoints
   for item in keypoints:
@@ -75,3 +116,81 @@ def plot(data, num):
         plt.scatter(data[item + '_x'][num], data[item + '_y'][num])
   
   plt.show()
+  
+
+  
+def avgPatch(data, feature, size):
+  """
+  Returns square-sized patch that is the average of all patches about facial feature with side length (2*size + 1)
+  """
+  numImages = 0
+  patch = np.zeros((size*2+1,size*2+1))
+
+  for i in data.index:
+    # ignore if feature is empty
+    if np.isnan(data[feature + '_x'][i]):
+      continue
+  
+    x_left = data[feature + '_x'][i] - size
+    x_right = data[feature + '_x'][i] + size
+    y_top = data[feature + '_y'][i] - size
+    y_bottom = data[feature + '_y'][i] + size
+    
+    # ignore if patch goes off the edge
+    if x_left < 0 or y_top < 0:
+      continue
+    elif x_right > 95 or y_bottom > 95:
+      continue
+    else:
+      numImages += 1
+      patch += data['Image'][i][y_top:y_bottom+1,x_left:x_right+1]
+      
+  patch = patch.astype('int64') / float(numImages)
+  
+  # Uncomment following lines if you want to view average patch
+  # plt.imshow(patch, cmap=cm.Greys_r, interpolation='nearest')
+  # plt.show()
+      
+  return patch
+  
+
+
+def bestMatch(data, image, patch, feature, searchSize):
+  """
+  Returns coordinates of best match for given patch in image
+  """
+  # determine average location for feature
+  avg_x = data[feature + '_x'].mean()
+  avg_y = data[feature + '_y'].mean()
+  
+  # calculate patch size from given patch
+  patchSize = len(patch)
+  patchRad = (patchSize - 1)/2
+  
+  patchSer = Series(np.squeeze(patch.reshape(1,patchSize*patchSize)))
+  
+  # calculate search grid around average location of feature of size searchSize
+  x_left = int(avg_x - searchSize)
+  x_right = int(avg_x + searchSize)
+  y_top = int(avg_y - searchSize)
+  y_bottom = int(avg_y + searchSize)
+  
+  # create Series to log correlations of images from search grid to given patch
+  corrList = Series(index = itertools.product(range(x_left,x_right),range(y_top,y_bottom)))
+  
+  for x,y in corrList.index:
+    # find patch centered at x,y
+    image_xy = image[y-patchRad:y+patchRad+1,x-patchRad:x+patchRad+1]
+    imageSer = Series(np.squeeze(image_xy.reshape(1,patchSize*patchSize)))
+    # log correlation
+    corrList[(x,y)] = imageSer.corr(patchSer)
+    
+  # select coordinates with best correlation to given patch
+  pred = corrList.idxmax()
+  
+  # plot prediction against test image
+  plt.imshow(image, cmap=cm.Greys_r)
+  plt.scatter(pred[0],pred[1])
+  plt.show()
+  
+  return pred
