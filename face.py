@@ -14,6 +14,10 @@ import itertools
   10.3.2013 1:00pm - Replaced readData() with readTrain() and readTest() that save each Image as a 96x96 numpy array during file reading
                      However, the training DataFrame takes up a decent chunk of memory so I recommend you don't load the whole thing until you need to
                      Modified (now named) plotImage() to accomodate above changes
+                     
+  10.3.2013 8:00pm - Added avgPatch() and bestMatch() functions
+  
+  10.6.2013 3:00pm - Fixed bug in readTest()
 """
 """
 Original Columns Names
@@ -93,6 +97,7 @@ def readTest():
     reader = csv.reader(csvfile, delimiter=',')
     
     for row in reader:
+      row_dict = {}
       if first_row:
         first_row = False
         continue
