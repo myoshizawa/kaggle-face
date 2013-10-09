@@ -18,6 +18,9 @@ import itertools
   10.3.2013 8:00pm - Added avgPatch() and bestMatch() functions
   
   10.6.2013 3:00pm - Fixed bug in readTest()
+  
+  10.9.2013 3:30pm - Added avgPatchPred() function that will make mean patch predictions for a set of samples
+                     Modified bestMatch() so you can control whether or not it prints the output
 """
 """
 Original Columns Names
@@ -160,7 +163,7 @@ def avgPatch(data, feature, size):
   
 
 
-def bestMatch(data, image, patch, feature, searchSize):
+def bestMatch(data, image, patch, feature, searchSize, plot = False):
   """
   Returns coordinates of best match for given patch in image
   """
@@ -194,8 +197,22 @@ def bestMatch(data, image, patch, feature, searchSize):
   pred = corrList.idxmax()
   
   # plot prediction against test image
-  plt.imshow(image, cmap=cm.Greys_r)
-  plt.scatter(pred[0],pred[1])
-  plt.show()
+  if plot:
+    plt.imshow(image, cmap=cm.Greys_r)
+    plt.scatter(pred[0],pred[1])
+    plt.show()
   
   return pred
+  
+  
+def avgPatchPred(train, test, feature, patchSize = 10, searchSize = 5):
+  
+  patch = avgPatch(train, feature, patchSize)
+  
+  predictions = Series(index = test.index)
+  
+  for num in test.index:
+    predictions[num] = bestMatch(train, test['Image'][num], patch, feature, searchSize)
+    
+  return predictions
+  
