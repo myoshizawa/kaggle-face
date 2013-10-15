@@ -3,7 +3,7 @@ from pandas import DataFrame
 import numpy as np
 import csv
 
-def trainingPatches(data, feature, patchRadius = 10, numWith = 4, numWithout = 8):
+def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 8):
   """
   Returns a two column DataFrame, one containis square patches (side length = 2 * patchRadius) as a numpy array, the other a 1 or 0 depending on whether it contains the feature
   Records numWith patches containing feature and numWithout patches that do not contain feature
@@ -121,7 +121,3 @@ def readH5(title, filename):
   store = pd.HDFStore(filename + '.h5')
   
   return store[title]
-      
-
-      
-      
