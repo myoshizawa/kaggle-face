@@ -3,10 +3,10 @@ import pandas as pd
 from pandas import DataFrame, Series
 import numpy as np
 import csv
-import features
+import math
 from time import time
 
-def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 8):
+def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4):
   """
   Returns a two column DataFrame, one containis square patches (side length = 2 * patchRadius) as a numpy array, the other a 1 or 0 depending on whether it contains the feature
   Records numWith patches containing feature and numWithout patches that do not contain feature
@@ -128,12 +128,12 @@ def readH5(filename, title):
   
 def calcIntImage(trainingSet):
   """
-  Reads in a DataFrame with a column 'Patch' and returns a column with integral images calculated
+  Reads in a DataFrame with a column 'Patch' and returns DataFrame with a new column containing integral images
   """
   ii = []
   
   for sample in trainingSet.index:
-    ii.append(features.integral_image(trainingSet['Patch'][sample]))
+    ii.append(integralImage(trainingSet['Patch'][sample]))
     
   trainingSet['IntImage'] = ii
 
@@ -166,93 +166,130 @@ def featureCounter():
             numFeatures += 1
 
   return numFeatures
-
   
-def weakClassifier(patchSet, feature):
+
+def integralImage(patch):
+  """
+  This function computes the integral image. 
+  INPUT: An NxN numpy array representing an image
+  OUTPUT: The corresponding integral image 
+  where the (x,y) coordinate gives you the sum of the pixels in the rectangle between (0,0) and (x,y)
+  note that if x or y is 0, the integral image is 0
+  """
+ 
+  N=len(patch)
+  s = np.zeros((N+1,N+1), dtype=np.int32)
+  int_im = np.zeros((N+1,N+1), dtype=np.int32)
+    
+  for x in xrange(1,N+1):
+    for y in xrange(1,N+1):
+      s[x][y] = s[x][y-1] + patch[x-1][y-1]
+      int_im[x][y] = int_im[x-1][y] + s[x][y]
+ 	 
+  return int_im
+
+
+def feature21(x1,y1,x2,y2,ii):
+  """
+  2-features parted vertically
+  """
+  y12 = (y1 + y2) / 2
+  
+  return ii[y2,x2] - 2*ii[y12,x2] + ii[y1,x2] - ii[y2,x1] + 2*ii[y12,x1] - ii[y1,x1]
+  
+
+def feature12(x1,y1,x2,y2,ii):
+  """
+  2-features parted horizontally
+  """
+  
+  x12 = (x1 + x2) / 2
+  
+  return ii[y2,x2] - 2*ii[y2,x12] + ii[y2,x1] - ii[y1,x2] + 2*ii[y1,x12] - ii[y1,x1]
+  
+  
+def feature31(x1,y1,x2,y2,ii):
+  """
+  3-features sliced vertically
+  """
+  
+  third = (y2 - y1)/3
+  y13 = y1 + third
+  y23 = y13 + third
+  
+  return ii[y2,x2] - 2*ii[y23,x2] + 2*ii[y13,x2] - ii[y1,x2] - ii[y2,x1] + 2*ii[y23,x1] - 2*ii[y13,x1] + ii[y1,x1]
+
+def feature13(x1,y1,x2,y2,ii):
+  """
+  3-features sliced horizontally
+  """
+  
+  third = (x2 - x1)/3
+  x13 = x1 + third
+  x23 = x13 + third
+  
+  return ii[y2,x2] - 2*ii[y2,x23] + 2*ii[y2,x13] - ii[y2,x1] - ii[y1,x2] + 2*ii[y1,x23] - 2*ii[y1,x13] + ii[y1,x1]
+  
+  
+def feature22(x1,y1,x2,y2,ii):
+  """
+  4-features
+  """
+  
+  x12 = (x1 + x2)/2
+  y12 = (y1 + y2)/2
+  
+  return ii[y2,x2] - 2*ii[y2,x12] + ii[y2,x1] - 2*ii[y12,x2] + 4*ii[y12,x12] - 2*ii[y12,x1] + ii[y1,x2] - 2*ii[y1,x12] + ii[y1,x1]
+  
+  
+def rectFeature(type,x1,y1,x2,y2,ii):
+  """
+  DESCRIPTION: Given an integral image this function is capable of computing any kind of feature.
+  INPUT: The type of feature (one of 12,21,13,31,22)
+  (x1,y1) is the coordinates of the top left corner of the feature, (x2,y2) the coordinates of the bottom right corner of the feature
+    Note that we use the coordinate system where (0,0) indicates the top left corner of the patch
+  ii is the integral image
+  OUTPUT: The desired feature
+  """
+  featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
+  
+  return featureTypes[type](x1,y1,x2,y2,ii)
+  
+  
+def calcFeature(patchSet, type, x1, y1, x2, y2):
+  """
+  Takes a dataFrame with integral images (under column 'IntImage') and adds a column 'Value' with the feature values
+  """
+  patchSet['Value'] = patchSet['IntImage'].apply(lambda x: rectFeatures(type, x1, y1, x2, y2, x))
+  
+  patchSet = patchSet[['Value','Feature?']]
+  
+  
+def weakClassifier(patchSet):
   """
   Reads in a DataFrame with column 'Feature?' that contains 0 or 1 whether it contains the feature
-                            column 'IntImage' that contains the integral image data for the training patch
+    ALERT - currently assumes DataFrame contains a column labeled 'Value' that contains the feature values for running time analysis
+    
   Outputs the minimum error, threshold, and parity
     parity = 1 => feature value > threshold are classified as containing the desired feature
     parity = -1 => feature value =< threshold are classified as containing the desired feature
   """
-  
-  # initialize dict
-  featureDict = {}
-  featureDict[0] = {}
-  featureDict[1] = {}
-  
-  # calculate feature for each patch and update dict
-  for sample in patchSet.index:
-    # ii = features.integral_image(patchSet['Patch'][sample])
-    value = features.rect_features(feature[0],feature[1],feature[2],feature[3],feature[4],patchSet['IntImage'][sample])
     
-    if value in featureDict[patchSet['Feature?'][sample]]:
-      featureDict[patchSet['Feature?'][sample]][value] += 1
-    else:
-      featureDict[patchSet['Feature?'][sample]][value] = 1
-
-  # convert dict into DataFrame, fill empty values with zeros
-  featureVals = DataFrame(featureDict)
-  featureVals = featureVals.fillna(0)
-  featureVals = featureVals.sort_index()
+  # create DataFrame that has 0 and 1 as column headings, feature value as rows, and number of occurrences as the table entries
+  featureVals = patchSet['Feature?'].groupby(patchSet['Value']).value_counts().unstack()
   
-  # initialize totals
-  total0 = featureVals[0].sum()
-  total1 = featureVals[1].sum()
-  total = total0 + total1
-
-  # initialize starting error
-  minError = total
-  maxError = 0
+  # fill empty values with 0
+  featureVals.fillna(0, inplace=True)
   
-  # initialize starting Type I errors
-  currentMinType1 = 0
-  currentMaxType1 = total1
+  # diff calculates how much the error changes if we moved the threshold from the minimum feature value to the current feature value
+  diff = (featureVals[1] - featureVals[0]).cumsum()
   
-  minType1 = 0
-  maxType1 = total1
+  # log the minimum error for both possible parities
+  posError = featureVals[0].sum() + diff.min()
+  negError = featureVals[1].sum() - diff.max()
   
-  # initialize starting Type I + II error
-  currentError = total0
-  
-  for i in featureVals.index:
-    # update current error and Type I errors
-    currentError += featureVals[1][i] - featureVals[0][i]
-    currentMinType1 += featureVals[1][i]
-    currentMaxType1 -= featureVals[1][i]
-    
-    # if error is a new minimum, record it
-    if currentError < minError:
-      minError = currentError
-      minThreshold = i
-      minType1 = currentMinType1
-    # if there is a tie but Type I error is less, record it
-    elif currentError == minError and currentMinType1 < minType1:
-      minError = currentError
-      minThreshold = i
-      minType1 = currentMinType1
-    
-    # if error is a new maximum, record it
-    if currentError > maxError:
-      maxError = currentError
-      maxThreshold = i
-      maxType1 = currentMaxType1
-    # if there is a tie but Type I error is less, record it
-    elif currentError == maxError and currentMaxType1 < maxType1:
-      maxError = currentError
-      maxThreshold = i
-      maxType1 = currentMaxType1
-
-  # if total - maxError < minError, then switch parity
-  if total - maxError < minError:
-    return total - maxError, maxThreshold, -1
-  # if there is a tie, go with parity that produces lowest Type I error
-  elif total - maxError == minError:
-    if maxType1 > minType1:
-      return total - maxError, maxThreshold, -1
-    else:
-      return minError, minThreshold, 1
-  # otherwise, maintain parity
+  # return the least error
+  if posError <= negError:
+    return posError/len(patchSet), diff.idxmin(), 1
   else:
-    return minError, minThreshold, 1
+    return negError/len(patchSet), diff.idxmax(), -1
