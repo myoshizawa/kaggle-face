@@ -2,33 +2,54 @@ import random
 import pandas as pd
 from pandas import DataFrame, Series
 import numpy as np
-import csv
-import math
+import face
 from time import time
 
-def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4):
+def demo(type, x1, y1, x2, y2, keypoint = 'left_eye_center'):
   """
-  Returns a two column DataFrame, one containis square patches (side length = 2 * patchRadius) as a numpy array, the other a 1 or 0 depending on whether it contains the feature
-  Records numWith patches containing feature and numWithout patches that do not contain feature
-  Does not record patches containing feature if feature is too close (within patchRadius/2) to the boundary of image or sample has no feature information
-  Containing the feature means the patch center is within patchRadius/2 of the feature location (taxi cab metric)
-  Not containing the feature means the patch center is more than patchRadius from the feature location (taxi cab metric)
+  Input: type = 12,21,13,31, or 22
+         x1,y1,x2,y2 = upper left and lower right corners of feature
+         keypoint = facial keypoint
+  Reads training data from .csv file, creates patchSet of training patches for desired keypoint, 
+  finds integral images of each patch, and trains weak classifier for entered feature
+  """
+  train = face.readTrain()
+  patchSet = trainingPatches(train, keypoint)
+  calcIntImage(patchSet)
+  calcFeatures(patchSet, type, x1, y1, x2, y2)
+  patchSet['Weights'] = np.ones(len(patchSet))
+  weakClassifier(patchSet, type, x1, y1, x2, y2)
+  # writeH5(patchSet, 'store', 'patchSet')
+  
+
+def trainingPatches(data, keypoint, patchRadius = 12, numWith = 4, numWithout = 4):
+  """
+  Returns a 3-column DataFrame
+    Patch: contains square patches (side length = 2 * patchRadius) as a numpy array
+    1: a 1 in this column means facial keypoint present in patch (0 otherwise)
+    0: a 1 in this column means facial keypoint not present (0 otherwise)
+  Records numWith patches containing keypoint and numWithout patches that do not contain keypoint
+  Does not record patches if keypoint is too close (within patchRadius/2) to the boundary of image or sample has no keypoint information
+  Containing the keypoint means the patch center is within patchRadius/2 of the keypoint location (taxi cab metric)
+  Not containing the keypoint means the patch center is more than patchRadius from the keypoint location (taxi cab metric)
   """
 
   # will become the columns of the returned DataFrame
   patchList = []
-  containsFeature = []
+  keypointYes = []
+  keypointNo = []
   
   for sample in data.index:
   
-    # extract feature location
-    featureLocX = data[feature + '_x'][sample]
-    featureLocY = data[feature + '_y'][sample]
+    # extract keypoint location
+    keypointLocX = data[keypoint + '_x'][sample]
+    keypointLocY = data[keypoint + '_y'][sample]
     
-    # if feature location is not present, report and just record patches that do not contain feature
-    if np.isnan(featureLocX) or np.isnan(featureLocY):
-      print 'Sample %s does not have %s data' % (sample, feature)
+    # if keypoint location is not present, report
+    if np.isnan(keypointLocX) or np.isnan(keypointLocY):
+      print 'Sample %s does not have %s data' % (sample, keypoint)
       
+      """
       for i in range(numWithout):
       
         imageDict = {}
@@ -42,7 +63,22 @@ def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4
       
         patchList.append(imageDict)
         containsFeature.append(0) 
+      """
       
+      continue
+    
+    # report if feature location is too close to boundary
+    if keypointLocX < patchRadius/2:
+      print 'Sample %s is too close to left boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocX > 95-patchRadius/2:
+      print 'Sample %s is too close to right boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocY < patchRadius/2:
+      print 'Sample %s is too close to top boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocY > 95-patchRadius/2:
+      print 'Sample %s is too close to bottom boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
       continue
     
     # if feature location is present, record patches that do not contain feature
@@ -57,27 +93,14 @@ def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4
         patchCenterX = random.randint(patchRadius,95-patchRadius)
         patchCenterY = random.randint(patchRadius,95-patchRadius)
         
-        if (patchCenterX < int(featureLocX - patchRadius) or patchCenterX > int(featureLocX + patchRadius)) and (patchCenterY < int(featureLocY - patchRadius) or patchCenterY > int(featureLocY + patchRadius)):
+        if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
           contained = False
           
       imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
       
       patchList.append(imageDict)
-      containsFeature.append(0)   
-    
-    # report if feature location is too close to boundary
-    if featureLocX < patchRadius/2:
-      print 'Sample %s is too close to left boundary at (%d,%d)' % (sample, featureLocX, featureLocY)
-      continue
-    elif featureLocX > 95-patchRadius/2:
-      print 'Sample %s is too close to right boundary at (%d,%d)' % (sample, featureLocX, featureLocY)
-      continue
-    elif featureLocY < patchRadius/2:
-      print 'Sample %s is too close to top boundary at (%d,%d)' % (sample, featureLocX, featureLocY)
-      continue
-    elif featureLocY > 95-patchRadius/2:
-      print 'Sample %s is too close to bottom boundary at (%d,%d)' % (sample, featureLocX, featureLocY)
-      continue
+      keypointNo.append(1)
+      keypointYes.append(0)
   
     # if feature is not too close to boundary, record patches containing feature
     for i in range(numWith):
@@ -88,8 +111,8 @@ def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4
     
       # ensure patch is not too close to boundary
       while closeToBoundary:
-        patchCenterX = random.randint(int(featureLocX - patchRadius/2), int(featureLocX + patchRadius/2)+1)
-        patchCenterY = random.randint(int(featureLocY - patchRadius/2), int(featureLocY + patchRadius/2)+1)
+        patchCenterX = random.randint(int(keypointLocX - patchRadius/2), int(keypointLocX + patchRadius/2)+1)
+        patchCenterY = random.randint(int(keypointLocY - patchRadius/2), int(keypointLocY + patchRadius/2)+1)
       
         if patchCenterX >= patchRadius and patchCenterX <= 95-patchRadius and patchCenterY >= patchRadius and patchCenterY <= 95-patchRadius:
           closeToBoundary = False
@@ -97,33 +120,15 @@ def trainingPatches(data, feature, patchRadius = 12, numWith = 4, numWithout = 4
       imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
       
       patchList.append(imageDict)
-      containsFeature.append(1)     
+      keypointYes.append(1)
+      keypointNo.append(0)
 
   # combine lists into a single DataFrame
   trainingSet = DataFrame(patchList)
-  trainingSet['Feature?'] = containsFeature
+  trainingSet[1] = keypointYes
+  trainingSet[0] = keypointNo
   
   return trainingSet
-  
-  
-def writeH5(data, filename, title):
-  """
-  Writes data to filename.h5 with key title
-  """
-  store = pd.HDFStore(filename + '.h5')
-  
-  store[title] = data
-  
-  store.close()
-
-  
-def readH5(filename, title):
-  """
-  Reads data from filename.h5 with key title
-  """
-  store = pd.HDFStore(filename + '.h5')
-  
-  return store[title]
   
   
 def calcIntImage(trainingSet):
@@ -138,36 +143,6 @@ def calcIntImage(trainingSet):
   trainingSet['IntImage'] = ii
 
   
-def featureCounter():
-  """
-  Function to calculate the number of features in a 24 x 24 patch
-  """
-
-  numFeatures = 0
-  
-  for a in range(24):
-    for b in range(24):
-      for x in range(a+1,25):
-        for y in range(b+1,25):
-          # horizontal 2-rectangle features
-          if (x - a) % 2 == 0:
-            numFeatures += 1
-          # vertical 2-rectangle features
-          if (y - b) % 2 == 0:
-            numFeatures += 1
-          # horizontal 3-rectangle features
-          if (x - a) % 3 == 0:
-            numFeatures += 1
-          # vertical 3-rectangle features
-          if (y - b) % 3 == 0:
-            numFeatures += 1
-          # 4-rectangle features
-          if (x - a) % 2 == 0 and (y - b) % 2 == 0:
-            numFeatures += 1
-
-  return numFeatures
-  
-
 def integralImage(patch):
   """
   This function computes the integral image. 
@@ -258,28 +233,27 @@ def rectFeature(type,x1,y1,x2,y2,ii):
   
 def calcFeature(patchSet, type, x1, y1, x2, y2):
   """
-  Takes a dataFrame with integral images (under column 'IntImage') and adds a column 'Value' with the feature values
+  Takes a dataFrame with integral images (under column 'IntImage') and adds a column '(type,x1,y1,x2,y2)' with the feature values
   """
-  patchSet['Value'] = patchSet['IntImage'].apply(lambda x: rectFeatures(type, x1, y1, x2, y2, x))
+  columnName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
+  patchSet[columnName] = patchSet['IntImage'].apply(lambda x: rectFeature(type, x1, y1, x2, y2, x))
   
-  patchSet = patchSet[['Value','Feature?']]
   
-  
-def weakClassifier(patchSet):
+def weakClassifier(patchSet, type, x1, y1, x2, y2):
   """
-  Reads in a DataFrame with column 'Feature?' that contains 0 or 1 whether it contains the feature
-    ALERT - currently assumes DataFrame contains a column labeled 'Value' that contains the feature values for running time analysis
-    
+  Input: patchSet is a DataFrame with columns 1, 0, and 'Weights', and '(type,x1,y1,x2,y2)'
+    type, x1, y1, x2, y2 uniquely determines a feature
   Outputs the minimum error, threshold, and parity
-    parity = 1 => feature value > threshold are classified as containing the desired feature
-    parity = -1 => feature value =< threshold are classified as containing the desired feature
+    parity = 1 => feature value > threshold are classified as containing the facial keypoint
+    parity = -1 => feature value =< threshold are classified as containing the facial keypoint
   """
-    
-  # create DataFrame that has 0 and 1 as column headings, feature value as rows, and number of occurrences as the table entries
-  featureVals = patchSet['Feature?'].groupby(patchSet['Value']).value_counts().unstack()
+  featureName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
   
-  # fill empty values with 0
-  featureVals.fillna(0, inplace=True)
+  # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences weighted by 'Weights' as the table entries
+  featureVals = DataFrame(index = patchSet.index)
+  featureVals[1] = patchSet[1] * patchSet['Weights']
+  featureVals[0] = patchSet[0] * patchSet['Weights']
+  featureVals = featureVals.groupby(patchSet[featureName]).sum()
   
   # diff calculates how much the error changes if we moved the threshold from the minimum feature value to the current feature value
   diff = (featureVals[1] - featureVals[0]).cumsum()
