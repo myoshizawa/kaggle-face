@@ -5,6 +5,7 @@ import numpy as np
 import face
 from time import time
 
+
 def demo(type, x1, y1, x2, y2, keypoint = 'left_eye_center'):
   """
   Input: type = 12,21,13,31, or 22
@@ -22,7 +23,7 @@ def demo(type, x1, y1, x2, y2, keypoint = 'left_eye_center'):
   # writeH5(patchSet, 'store', 'patchSet')
   
 
-def trainingPatches(data, keypoint, patchRadius = 12, numWith = 4, numWithout = 4):
+def trainingPatches(data, keypoint, numWith = 4, numWithout = 4):
   """
   Returns a 3-column DataFrame
     Patch: contains square patches (side length = 2 * patchRadius) as a numpy array
@@ -169,8 +170,14 @@ def feature21(x1,y1,x2,y2,ii):
   2-features parted vertically
   """
   y12 = (y1 + y2) / 2
+  f1 = ii[y1,x1]
+  f2 = ii[y12,x1]
+  f3 = ii[y2,x1]
+  f4 = ii[y1,x2]
+  f5 = ii[y12,x2]
+  f6 = ii[y2,x2]
   
-  return ii[y2,x2] - 2*ii[y12,x2] + ii[y1,x2] - ii[y2,x1] + 2*ii[y12,x1] - ii[y1,x1]
+  return f6 - f5 - f5 + f4 - f3 + f2 + f2 - f1
   
 
 def feature12(x1,y1,x2,y2,ii):
@@ -179,8 +186,14 @@ def feature12(x1,y1,x2,y2,ii):
   """
   
   x12 = (x1 + x2) / 2
+  f1 = ii[y1,x1]
+  f2 = ii[y1,x12]
+  f3 = ii[y1,x2]
+  f4 = ii[y2,x1]
+  f5 = ii[y2,x12]
+  f6 = ii[y2,x2]
   
-  return ii[y2,x2] - 2*ii[y2,x12] + ii[y2,x1] - ii[y1,x2] + 2*ii[y1,x12] - ii[y1,x1]
+  return f6 - f5 - f5 + f4 - f3 + f2 + f2 - f1
   
   
 def feature31(x1,y1,x2,y2,ii):
@@ -191,8 +204,16 @@ def feature31(x1,y1,x2,y2,ii):
   third = (y2 - y1)/3
   y13 = y1 + third
   y23 = y13 + third
+  f1 = ii[y1,x1]
+  f2 = ii[y13,x1]
+  f3 = ii[y23,x1]
+  f4 = ii[y2,x1]
+  f5 = ii[y1,x2]
+  f6 = ii[y13,x2]
+  f7 = ii[y23,x2]
+  f8 = ii[y2,x2]
   
-  return ii[y2,x2] - 2*ii[y23,x2] + 2*ii[y13,x2] - ii[y1,x2] - ii[y2,x1] + 2*ii[y23,x1] - 2*ii[y13,x1] + ii[y1,x1]
+  return f8 - f7 - f7 + f6 + f6 - f5 - f4 + f3 + f3 - f2 - f2 + f1
 
 def feature13(x1,y1,x2,y2,ii):
   """
@@ -202,8 +223,16 @@ def feature13(x1,y1,x2,y2,ii):
   third = (x2 - x1)/3
   x13 = x1 + third
   x23 = x13 + third
+  f1 = ii[y1,x1]
+  f2 = ii[y1,x13]
+  f3 = ii[y1,x23]
+  f4 = ii[y1,x2]
+  f5 = ii[y2,x1]
+  f6 = ii[y2,x13]
+  f7 = ii[y2,x23]
+  f8 = ii[y2,x2]
   
-  return ii[y2,x2] - 2*ii[y2,x23] + 2*ii[y2,x13] - ii[y2,x1] - ii[y1,x2] + 2*ii[y1,x23] - 2*ii[y1,x13] + ii[y1,x1]
+  return f8 - f7 - f7 + f6 + f6 - f5 - f4 + f3 + f3 - f2 - f2 + f1
   
   
 def feature22(x1,y1,x2,y2,ii):
@@ -213,31 +242,52 @@ def feature22(x1,y1,x2,y2,ii):
   
   x12 = (x1 + x2)/2
   y12 = (y1 + y2)/2
+  f1 = ii[y1,x2]
+  f2 = ii[y1,x12]
+  f3 = ii[y1,x2]
+  f4 = ii[y12,x1]
+  f5 = ii[y12,x12]
+  f6 = ii[y12,x2]
+  f7 = ii[y2,x1]
+  f8 = ii[y2,x12]
+  f9 = ii[y2,x2]
   
-  return ii[y2,x2] - 2*ii[y2,x12] + ii[y2,x1] - 2*ii[y12,x2] + 4*ii[y12,x12] - 2*ii[y12,x1] + ii[y1,x2] - 2*ii[y1,x12] + ii[y1,x1]
-  
-  
-def rectFeature(type,x1,y1,x2,y2,ii):
-  """
-  DESCRIPTION: Given an integral image this function is capable of computing any kind of feature.
-  INPUT: The type of feature (one of 12,21,13,31,22)
-  (x1,y1) is the coordinates of the top left corner of the feature, (x2,y2) the coordinates of the bottom right corner of the feature
-    Note that we use the coordinate system where (0,0) indicates the top left corner of the patch
-  ii is the integral image
-  OUTPUT: The desired feature
-  """
-  featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
-  
-  return featureTypes[type](x1,y1,x2,y2,ii)
+  return f9 - f8 - f8 + f7 - f6 - f6 + f5 + f5 + f5 + f5 - f4 - f4 + f3 - f2 - f2 + f1
   
   
-def calcFeature(patchSet, type, x1, y1, x2, y2):
+
+def calcFeature(patchSet, values, type, x1, y1, x2, y2):
   """
   Takes a dataFrame with integral images (under column 'IntImage') and adds a column '(type,x1,y1,x2,y2)' with the feature values
   """
   columnName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
-  patchSet[columnName] = patchSet['IntImage'].apply(lambda x: rectFeature(type, x1, y1, x2, y2, x))
-  
+  values[columnName] = patchSet['IntImage'].apply(lambda x: featureTypes[type](x1, y1, x2, y2, x)).astype(np.int32)
+
+
+def featureValues(patchSet, values):
+
+  patchSize = len(patchSet['IntImage'][0])
+
+  for a in xrange(patchSize-1):
+    for b in xrange(patchSize-1):
+      for x in xrange(a+2,patchSize):
+        for y in xrange(b+2,patchSize):
+          # feature12
+          if (x-a) % 4 == 0 and (y-b) % 2 == 0 and a % 2 == 1:
+            calcFeature(patchSet,values,12,a,b,x,y)
+          # feature 21
+          if (y-b) % 4 == 0 and (x-a) % 2 == 0 and b % 2 == 1:
+            calcFeature(patchSet,values,12,a,b,x,y)
+          # feature 13
+          if (x-a) % 6 == 0 and (y-b) % 2 == 0:
+            calcFeature(patchSet,values,13,a,b,x,y)
+          # feature 31
+          if (y-b) % 6 == 0 and (x-a) % 2 == 0:
+            calcFeature(patchSet,values,31,a,b,x,y)
+          # feature 22
+          if (x-a) % 4 == 0 and (y-b) % 4 == 0:
+            calcFeature(patchSet,values,22,a,b,x,y)
+          
   
 def weakClassifier(patchSet, type, x1, y1, x2, y2):
   """
@@ -267,3 +317,6 @@ def weakClassifier(patchSet, type, x1, y1, x2, y2):
     return posError/len(patchSet), diff.idxmin(), 1
   else:
     return negError/len(patchSet), diff.idxmax(), -1
+    
+featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
+patchRadius = 12
