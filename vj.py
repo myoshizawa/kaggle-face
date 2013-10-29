@@ -17,13 +17,13 @@ def demo(type, x1, y1, x2, y2, keypoint = 'left_eye_center'):
   train = face.readTrain()
   patchSet = trainingPatches(train, keypoint)
   calcIntImage(patchSet)
-  calcFeatures(patchSet, type, x1, y1, x2, y2)
+  calcFeature(patchSet, type, x1, y1, x2, y2)
   patchSet['Weights'] = np.ones(len(patchSet))
   weakClassifier(patchSet, type, x1, y1, x2, y2)
   # writeH5(patchSet, 'store', 'patchSet')
   
 
-def trainingPatches(data, keypoint, numWith = 4, numWithout = 4):
+def trainingPatches(data, keypoint, numWithout = 4):
   """
   Returns a 3-column DataFrame
     Patch: contains square patches (side length = 2 * patchRadius) as a numpy array
@@ -50,7 +50,6 @@ def trainingPatches(data, keypoint, numWith = 4, numWithout = 4):
     if np.isnan(keypointLocX) or np.isnan(keypointLocY):
       print 'Sample %s does not have %s data' % (sample, keypoint)
       
-      """
       for i in range(numWithout):
       
         imageDict = {}
@@ -63,23 +62,9 @@ def trainingPatches(data, keypoint, numWith = 4, numWithout = 4):
         imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
       
         patchList.append(imageDict)
-        containsFeature.append(0) 
-      """
+        keypointYes.append(0)
+        keypointNo.append(1)
       
-      continue
-    
-    # report if feature location is too close to boundary
-    if keypointLocX < patchRadius/2:
-      print 'Sample %s is too close to left boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
-      continue
-    elif keypointLocX > 95-patchRadius/2:
-      print 'Sample %s is too close to right boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
-      continue
-    elif keypointLocY < patchRadius/2:
-      print 'Sample %s is too close to top boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
-      continue
-    elif keypointLocY > 95-patchRadius/2:
-      print 'Sample %s is too close to bottom boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
       continue
     
     # if feature location is present, record patches that do not contain feature
@@ -102,27 +87,29 @@ def trainingPatches(data, keypoint, numWith = 4, numWithout = 4):
       patchList.append(imageDict)
       keypointNo.append(1)
       keypointYes.append(0)
+    
+    # report if feature location is too close to boundary
+    if keypointLocX < patchRadius:
+      print 'Sample %s is too close to left boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocX > 95-patchRadius:
+      print 'Sample %s is too close to right boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocY < patchRadius:
+      print 'Sample %s is too close to top boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
+    elif keypointLocY > 95-patchRadius:
+      print 'Sample %s is too close to bottom boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
+      continue
   
-    # if feature is not too close to boundary, record patches containing feature
-    for i in range(numWith):
+    # if feature is not too close to boundary, record patch containing feature
+        
+    imageDict = {}
+    imageDict['Patch'] = data['Image'][sample][keypointLocY - patchRadius:keypointLocY + patchRadius, keypointLocX - patchRadius:keypointLocX + patchRadius]
     
-      imageDict = {}
-
-      closeToBoundary = True
-    
-      # ensure patch is not too close to boundary
-      while closeToBoundary:
-        patchCenterX = random.randint(int(keypointLocX - patchRadius/2), int(keypointLocX + patchRadius/2)+1)
-        patchCenterY = random.randint(int(keypointLocY - patchRadius/2), int(keypointLocY + patchRadius/2)+1)
-      
-        if patchCenterX >= patchRadius and patchCenterX <= 95-patchRadius and patchCenterY >= patchRadius and patchCenterY <= 95-patchRadius:
-          closeToBoundary = False
-      
-      imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
-      
-      patchList.append(imageDict)
-      keypointYes.append(1)
-      keypointNo.append(0)
+    patchList.append(imageDict)
+    keypointYes.append(1)
+    keypointNo.append(0)
 
   # combine lists into a single DataFrame
   trainingSet = DataFrame(patchList)
@@ -264,9 +251,11 @@ def calcFeature(patchSet, values, type, x1, y1, x2, y2):
   values[columnName] = patchSet['IntImage'].apply(lambda x: featureTypes[type](x1, y1, x2, y2, x)).astype(np.int32)
 
 
-def featureValues(patchSet, values):
+def featureValues(patchSet):
 
   patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
 
   for a in xrange(patchSize-1):
     for b in xrange(patchSize-1):
@@ -277,7 +266,7 @@ def featureValues(patchSet, values):
             calcFeature(patchSet,values,12,a,b,x,y)
           # feature 21
           if (y-b) % 4 == 0 and (x-a) % 2 == 0 and b % 2 == 1:
-            calcFeature(patchSet,values,12,a,b,x,y)
+            calcFeature(patchSet,values,21,a,b,x,y)
           # feature 13
           if (x-a) % 6 == 0 and (y-b) % 2 == 0:
             calcFeature(patchSet,values,13,a,b,x,y)
@@ -288,8 +277,9 @@ def featureValues(patchSet, values):
           if (x-a) % 4 == 0 and (y-b) % 4 == 0:
             calcFeature(patchSet,values,22,a,b,x,y)
           
+  return values
   
-def weakClassifier(patchSet, type, x1, y1, x2, y2):
+def weakClassifier(patchSet, values, weights):
   """
   Input: patchSet is a DataFrame with columns 1, 0, and 'Weights', and '(type,x1,y1,x2,y2)'
     type, x1, y1, x2, y2 uniquely determines a feature
@@ -297,13 +287,12 @@ def weakClassifier(patchSet, type, x1, y1, x2, y2):
     parity = 1 => feature value > threshold are classified as containing the facial keypoint
     parity = -1 => feature value =< threshold are classified as containing the facial keypoint
   """
-  featureName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
-  
+    
   # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences weighted by 'Weights' as the table entries
   featureVals = DataFrame(index = patchSet.index)
-  featureVals[1] = patchSet[1] * patchSet['Weights']
-  featureVals[0] = patchSet[0] * patchSet['Weights']
-  featureVals = featureVals.groupby(patchSet[featureName]).sum()
+  featureVals[1] = patchSet[1] * weights
+  featureVals[0] = patchSet[0] * weights
+  featureVals = featureVals.groupby(values).sum()
   
   # diff calculates how much the error changes if we moved the threshold from the minimum feature value to the current feature value
   diff = (featureVals[1] - featureVals[0]).cumsum()
@@ -314,9 +303,52 @@ def weakClassifier(patchSet, type, x1, y1, x2, y2):
   
   # return the least error
   if posError <= negError:
-    return posError/len(patchSet), diff.idxmin(), 1
+    return Series({'error': posError, 'threshold': diff.idxmin(), 'parity': 1})
   else:
-    return negError/len(patchSet), diff.idxmax(), -1
+    return Series({'error': negError, 'threshold': diff.idxmax(), 'parity': -1})
+
+
+def updateWeights(weights, correct, beta):
+  
+  weights = weights * (beta ** correct)
+
+
+
+  
+def adaBoost(patchSet):
+
+  weights = Series(np.ones(len(patchSet)))
+  weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
+  weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
+  
+  nameDict = {0: '12-1', 1: '12-2', 2: '21-1', 3: '21-2', 4: '13', 5: '31', 6: '22'}
+  store = pd.HDFStore('storage.h5')
+  
+  error = float('inf')
+  
+  for i in xrange(7):
+    print i
+    featureVal = store[nameDict[i]]
+    
+    errorVal = featureVal.apply(lambda x: weakClassifier(patchSet, x, weights))
+    
+    curFeature = errorVal.ix['error',:].idxmin()
+    curError = errorVal[curFeature]['error']
+    
+    if curError < error:
+      feature = curFeature
+      error = errorVal[feature]['error']
+      threshold = errorVal[feature]['threshold']
+      parity = errorVal[feature]['parity']
+      if parity == 1:
+        correct = featureVal[feature] <= threshold
+      else:
+        correct = featureVal[feature] >= threshold
+    
+  store.close()
+    
+  return feature, error, threshold, parity, correct
+  
     
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
 patchRadius = 12
