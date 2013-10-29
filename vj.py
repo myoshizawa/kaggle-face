@@ -6,22 +6,73 @@ import face
 from time import time
 
 
-def demo(type, x1, y1, x2, y2, keypoint = 'left_eye_center'):
+def initialize(keypoint = 'left_eye_center'):
   """
-  Input: type = 12,21,13,31, or 22
-         x1,y1,x2,y2 = upper left and lower right corners of feature
-         keypoint = facial keypoint
-  Reads training data from .csv file, creates patchSet of training patches for desired keypoint, 
-  finds integral images of each patch, and trains weak classifier for entered feature
+  Input: keypoint = facial keypoint name (without _x or _y ending)
+  Output: DataFrame with set of (default = 35228) 24x24 pixel training patches
+    Patch records the pixel values in a numpy array
+    Columns 0 and 1 record whether the facial keypoint is present in the patch
+    IntImage has the integral image information in a numpy array
   """
+  # read training data from .csv
   train = face.readTrain()
+  # create training patch set (currently finds 1 patch containg keypoint (if possible), and 4 random patches that do not
   patchSet = trainingPatches(train, keypoint)
+  # calculate integral image for each patch
   calcIntImage(patchSet)
-  calcFeature(patchSet, type, x1, y1, x2, y2)
-  patchSet['Weights'] = np.ones(len(patchSet))
-  weakClassifier(patchSet, type, x1, y1, x2, y2)
-  # writeH5(patchSet, 'store', 'patchSet')
+  """
+  # stores training data and training patch set in storage.h5
+  storage = pd.HDFStore('storage.h5')
+  storage['train'] = train
+  storage['patchSet'] = patchSet
+  storage.close()
+  """
+  return patchSet
+
   
+def testWeakClassifier(patchSet, type, x1, y1, x2, y2):
+  """
+  Input: patchSet = DataFrame with training patches and columns IntImage, 0, 1
+         type = 12, 21, 13, 31, or 22 (type of rectangular feature)
+         x1, y1 = upper left coordinates
+         x2, y2 = bottom right coordinates
+  Output: Weak classifier information for the desired rectangular feature
+  """
+  values = DataFrame(index = patchSet.index)
+  # calculate values of desired feature and save in DataFrame values
+  calcFeature(patchSet, values, type, x1, y1, x2, y2)
+  
+  columnName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
+  
+  # initialize weights
+  weights = Series(np.ones(len(patchSet)))
+  weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
+  weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
+  
+  # create weak classifier for desired feature
+  return weakClassifier(patchSet, values[columnName], weights)
+  
+  
+def featureValues(patchSet):
+  """
+  Input: patchSet - DataFrame with column IntImage
+  Output: none
+  Calculates features for each integral image in patchSet and stores them in a local h5 storage file named storage.h5
+  Features will be stored in 7 different data frames, named according to nameDict
+  This process will likely take about 2 hours and will require a decent amount of memory
+  """
+
+  storage = pd.HDFStore('storage.h5')
+  for i in xrange(7):
+    # calculate feature values
+    values = featureDict[i](patchSet)
+    # store feature values in storage.h5
+    storage[nameDict[i]] = values
+  storage.close()
+  
+  
+
+################################################################
 
 def trainingPatches(data, keypoint, numWithout = 4):
   """
@@ -249,35 +300,126 @@ def calcFeature(patchSet, values, type, x1, y1, x2, y2):
   """
   columnName = '(%d,%d,%d,%d,%d)' % (type, x1, y1, x2, y2)
   values[columnName] = patchSet['IntImage'].apply(lambda x: featureTypes[type](x1, y1, x2, y2, x)).astype(np.int32)
+  
+  
+def featureValues12even(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  2-rectangle horizontal features with even top-left x-coordinate
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
+
+  for a in xrange(0,patchSize-1,2):
+    for b in xrange(patchSize-1):
+      for x in xrange(a+4,patchSize,4):
+        for y in xrange(b+2,patchSize, 2):
+          calcFeature(patchSet,values,12,a,b,x,y)
+  return values
+  
+
+def featureValues12odd(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  2-rectangle horizontal features with odd top-left x-coordinate
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
+
+  for a in xrange(1,patchSize-1,2):
+    for b in xrange(patchSize-1):
+      for x in xrange(a+4,patchSize,4):
+        for y in xrange(b+2,patchSize,2):  
+          calcFeature(patchSet,values,12,a,b,x,y)
+  return values
+  
+  
+def featureValues21even(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  2-rectangle vertical features with even top-left x-coordinate
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
+
+  for a in xrange(patchSize-1):
+    for b in xrange(0,patchSize-1,2):
+      for x in xrange(a+2,patchSize,2):
+        for y in xrange(b+4,patchSize,4):  
+          calcFeature(patchSet,values,21,a,b,x,y)
+  return values
 
 
-def featureValues(patchSet):
+def featureValues21odd(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  2-rectangle vertical features with odd top-left x-coordinate
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
 
+  for a in xrange(patchSize-1):
+    for b in xrange(1,patchSize-1,2):
+      for x in xrange(a+2,patchSize,2):
+        for y in xrange(b+4,patchSize,4):
+          calcFeature(patchSet,values,21,a,b,x,y)
+  return values
+  
+
+def featureValues13(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  3-rectangle horizontal features
+  """
   patchSize = len(patchSet['IntImage'][0])
   
   values = DataFrame(index = patchSet.index)
 
   for a in xrange(patchSize-1):
     for b in xrange(patchSize-1):
-      for x in xrange(a+2,patchSize):
-        for y in xrange(b+2,patchSize):
-          # feature12
-          if (x-a) % 4 == 0 and (y-b) % 2 == 0 and a % 2 == 1:
-            calcFeature(patchSet,values,12,a,b,x,y)
-          # feature 21
-          if (y-b) % 4 == 0 and (x-a) % 2 == 0 and b % 2 == 1:
-            calcFeature(patchSet,values,21,a,b,x,y)
-          # feature 13
-          if (x-a) % 6 == 0 and (y-b) % 2 == 0:
-            calcFeature(patchSet,values,13,a,b,x,y)
-          # feature 31
-          if (y-b) % 6 == 0 and (x-a) % 2 == 0:
-            calcFeature(patchSet,values,31,a,b,x,y)
-          # feature 22
-          if (x-a) % 4 == 0 and (y-b) % 4 == 0:
-            calcFeature(patchSet,values,22,a,b,x,y)
-          
+      for x in xrange(a+6,patchSize,6):
+        for y in xrange(b+2,patchSize,2):   
+          calcFeature(patchSet,values,13,a,b,x,y)
   return values
+  
+  
+def featureValues31(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  3-rectangle vertical features
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
+
+  for a in xrange(patchSize-1):
+    for b in xrange(patchSize-1):
+      for x in xrange(a+2,patchSize,2):
+        for y in xrange(b+6,patchSize,6):
+          calcFeature(patchSet,values,31,a,b,x,y)
+  return values
+  
+  
+def featureValues22(patchSet):
+  """
+  Calculates values for features using the integral images in patchSet
+  4-rectangle features
+  """
+  patchSize = len(patchSet['IntImage'][0])
+  
+  values = DataFrame(index = patchSet.index)
+
+  for a in xrange(patchSize-1):
+    for b in xrange(patchSize-1):
+      for x in xrange(a+4,patchSize,4):
+        for y in xrange(b+4,patchSize,4):
+          calcFeature(patchSet,values,22,a,b,x,y)
+  return values
+            
   
 def weakClassifier(patchSet, values, weights):
   """
@@ -308,24 +450,29 @@ def weakClassifier(patchSet, values, weights):
     return Series({'error': negError, 'threshold': diff.idxmax(), 'parity': -1})
 
 
-def updateWeights(weights, correct, beta):
-  
-  weights = weights * (beta ** correct)
+def updateWeights(weights, incorrect, beta):
+  """
+  Updates weights after an interation of adaBoost
+  """
+  weights = weights * (beta ** incorrect)
 
 
 
   
 def adaBoost(patchSet):
-
+  """
+  Work in progress
+  """
+  # initialize weights
   weights = Series(np.ones(len(patchSet)))
   weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
   weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
   
-  nameDict = {0: '12-1', 1: '12-2', 2: '21-1', 3: '21-2', 4: '13', 5: '31', 6: '22'}
   store = pd.HDFStore('storage.h5')
   
   error = float('inf')
   
+  # retrieve each set of features and determine minimum error
   for i in xrange(7):
     print i
     featureVal = store[nameDict[i]]
@@ -335,20 +482,24 @@ def adaBoost(patchSet):
     curFeature = errorVal.ix['error',:].idxmin()
     curError = errorVal[curFeature]['error']
     
+    # keep track of feature that provides minimum error, its weak classifier, and which samples were classified correctly
     if curError < error:
       feature = curFeature
       error = errorVal[feature]['error']
       threshold = errorVal[feature]['threshold']
       parity = errorVal[feature]['parity']
       if parity == 1:
-        correct = featureVal[feature] <= threshold
+        incorrect = featureVal[feature] <= threshold
       else:
-        correct = featureVal[feature] >= threshold
+        incorrect = featureVal[feature] >= threshold
     
   store.close()
     
-  return feature, error, threshold, parity, correct
+  return feature, error, threshold, parity, incorrect
   
     
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
+nameDict = {0: '12-0', 1: '12-1', 2: '21-0', 3: '21-1', 4: '13', 5: '31', 6: '22'}
+featureDict = {0: featureValues12even, 1: featureValues12odd, 2: featureValues21even, 3: featureValues21odd, 4: featureValues13, 5: featureValues31, 6: featureValues22}
+
 patchRadius = 12
