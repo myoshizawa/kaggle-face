@@ -70,6 +70,7 @@ def demoStrongClassifier(patchSet, featureList, threshold = -1):
   Output: none
   Creates a strong classifier based on features in featureList and outputs performance details
   """
+  # initialize weights
   weights = Series(np.ones(len(patchSet)))
   weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
   weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
@@ -78,33 +79,37 @@ def demoStrongClassifier(patchSet, featureList, threshold = -1):
   
   for feature in featureList:
   
-    # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences weighted by 'Weights' as the table entries
+    # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences (weighted) as the table entries
     weightedVals = DataFrame(index = patchSet.index)
     weightedVals[1] = patchSet[1] * weights
     weightedVals[0] = patchSet[0] * weights
   
+    # calculate feature values
     values = calcFeature(patchSet, feature[0], feature[1], feature[2], feature[3], feature[4])
     
+    # calculate weak classifier
     weak = weakClassifier(weightedVals, values)
     
     if weak['parity'] == 1:
       classCorrect = values > weak['threshold']
     else:
       classCorrect = values < weak['threshold']
+    # determine which samples were predicted correctly
     correct = classCorrect*patchSet[1] + (-classCorrect) * patchSet[0]
           
     beta = weak['error'] / (1 - weak['error'])
     alpha = np.log(1/beta)
+    # update weights
     weights = updateWeights(weights, correct, beta)
     
+    # add best weak classifier to strong classifier
     weak = weak.append(Series({'feature': feature, 'alpha': alpha}))
     strong = strong.append(weak, ignore_index = True)
     
-  print 'Strong Classifier:'
-  print strong
-  print '\n'
   print 'Performance on Training Patches:'
   print testClassifier(patchSet, strong, threshold)
+  
+  return strong
   
   
 def visualizeFeature(patchSet, type, x1, y1, x2, y2):
@@ -411,7 +416,7 @@ def featureValues12even(patchSet):
     for b in xrange(patchSize-1):
       for x in xrange(a+4,patchSize,4):
         for y in xrange(b+2,patchSize, 2):
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,12,a,b,x,y)
+          values[(12,a,b,x,y)] = calcFeature(patchSet,12,a,b,x,y)
   return values
   
 
@@ -428,7 +433,7 @@ def featureValues12odd(patchSet):
     for b in xrange(patchSize-1):
       for x in xrange(a+4,patchSize,4):
         for y in xrange(b+2,patchSize,2):  
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,12,a,b,x,y)
+          values[(12,a,b,x,y)] = calcFeature(patchSet,12,a,b,x,y)
   return values
   
   
@@ -445,7 +450,7 @@ def featureValues21even(patchSet):
     for b in xrange(0,patchSize-1,2):
       for x in xrange(a+2,patchSize,2):
         for y in xrange(b+4,patchSize,4):  
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,21,a,b,x,y)
+          values[(21,a,b,x,y)] = calcFeature(patchSet,21,a,b,x,y)
   return values
 
 
@@ -462,7 +467,7 @@ def featureValues21odd(patchSet):
     for b in xrange(1,patchSize-1,2):
       for x in xrange(a+2,patchSize,2):
         for y in xrange(b+4,patchSize,4):
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,21,a,b,x,y)
+          values[(21,a,b,x,y)] = calcFeature(patchSet,21,a,b,x,y)
   return values
   
 
@@ -479,7 +484,7 @@ def featureValues13(patchSet):
     for b in xrange(patchSize-1):
       for x in xrange(a+6,patchSize,6):
         for y in xrange(b+2,patchSize,2):   
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,13,a,b,x,y)
+          values[(13,a,b,x,y)] = calcFeature(patchSet,13,a,b,x,y)
   return values
   
   
@@ -496,7 +501,7 @@ def featureValues31(patchSet):
     for b in xrange(patchSize-1):
       for x in xrange(a+2,patchSize,2):
         for y in xrange(b+6,patchSize,6):
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,31,a,b,x,y)
+          values[(31,a,b,x,y)] = calcFeature(patchSet,31,a,b,x,y)
   return values
   
   
@@ -513,7 +518,7 @@ def featureValues22(patchSet):
     for b in xrange(patchSize-1):
       for x in xrange(a+4,patchSize,4):
         for y in xrange(b+4,patchSize,4):
-          values[(type,x1,y1,x2,y2)] = calcFeature(patchSet,values,22,a,b,x,y)
+          values[(22,a,b,x,y)] = calcFeature(patchSet,22,a,b,x,y)
   return values
             
   
@@ -550,24 +555,27 @@ def updateWeights(weights, correct, beta):
   return weights
 
   
-def adaBoost(patchSet, numFeatures):
+def adaBoost(patchSet, numFeatures, weights = 0):
   """
   Input: patchSet with columns 0, 1
          numFeatures = number of features desired in strong classifier
+         weights sets the initial weight values for each sample
   Output: Strong classifier information in a DataFrame
+          last set of weights (can input into later runs to start adaBoost where previous run left off)
   """
-  # initialize weights
-  weights = Series(np.ones(len(patchSet)))
-  weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
-  weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
+  if weights == 0:
+    # initialize weights
+    weights = Series(np.ones(len(patchSet)))
+    weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
+    weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
   
-  store = pd.HDFStore('storage.h5')
+  store = pd.HDFStore('crossVal.h5')
   
   strong = DataFrame(columns = ['feature', 'error', 'threshold', 'parity', 'alpha'])
   
   for j in xrange(numFeatures):
   
-    # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences weighted by 'Weights' as the table entries
+    # create DataFrame that has 0 and 1 as column headings, unique feature value as rows, and number of occurrences (weighted) as the table entries
     weightedVals = DataFrame(index = patchSet.index)
     weightedVals[1] = patchSet[1] * weights
     weightedVals[0] = patchSet[0] * weights
@@ -590,25 +598,29 @@ def adaBoost(patchSet, numFeatures):
         error = curError
         weak = errorVal[feature]
         
+        # determine which samples were classified as containing feature by weak classifier
         if weak['parity'] == 1:
           classCorrect = featureVals[feature] > weak['threshold']
         else:
           classCorrect = featureVals[feature] < weak['threshold']
+        # determine which samples were correctly classified by weak classifier
         correct = classCorrect*patchSet[1] + (-classCorrect) * patchSet[0]
           
     beta = error / (1 - error)
     alpha = np.log(1/beta)
+    # update weights
     weights = updateWeights(weights, correct, beta)
     
+    # add best weak classifier to strong classifier
     weak = weak.append(Series({'feature': feature, 'alpha': alpha}))
     strong = strong.append(weak, ignore_index = True)
     
   store.close()
     
-  return strong
+  return strong, weights
   
   
-def testClassifier(patchSet, strongClassifier, threshold = -1):
+def runStrong(patchSet, strongClassifier, threshold = 'default'):
   """
   Input: patchSet DataFrame with 1, 0, and IntImage columns
          strongClassifier DataFrame with alpha, feature, parity, threshold columns
@@ -616,31 +628,36 @@ def testClassifier(patchSet, strongClassifier, threshold = -1):
   Output: error, detection rate, and false positive rate of strong classifier
   """
   
-  if threshold == -1:
+  # if no threshold inputted, 
+  if threshold == 'default':
     threshold = strongClassifier['alpha'].sum() / 2
     
   print 'Testing with threshold %f' % threshold
   
   predictionValues = Series(np.zeros(len(patchSet)), index = patchSet.index)
   
+  # for each weak classifier in strong classifier, add weighted value to those classified as containing keypoint
   for i in strongClassifier.index:
     type, x1, y1, x2, y2 = strongClassifier['feature'][i]
+    # calculate feature for weak classifier
     featureValues = calcFeature(patchSet, type, x1, y1, x2, y2)
-    
+    # make prediction
     if strongClassifier['parity'][i] == 1:
       predictYes = featureValues > strongClassifier['threshold'][i]
     else:
       predictYes = featureValues < strongClassifier['threshold'][i]
-      
+    # add alpha value  
     predictionValues = predictionValues + strongClassifier['alpha'][i] * predictYes
     
+  # determine predictions (score must be above threshold)
   pred = (predictionValues > threshold)
+  # actual results
   actual = (patchSet[1] == 1)
-  
+  # error rate
   error = (pred != actual).sum() / float(len(patchSet))
-  
+  # detection rate (percent of patches containing keypoint correctly classified as so)
   detectRate = (patchSet[1] * pred).sum() / float(patchSet[1].sum())
-  
+  # false positive rate (percent of patches not containing keypoint classified as containing it)
   falsePosRate = (patchSet[0] * pred).sum() / float(patchSet[0].sum())
   
   return Series({'error': error, 'detection_rate': detectRate, 'false_positive_rate': falsePosRate})
@@ -651,3 +668,12 @@ nameDict = {0: '12-0', 1: '12-1', 2: '21-0', 3: '21-1', 4: '13', 5: '31', 6: '22
 featureDict = {0: featureValues12even, 1: featureValues12odd, 2: featureValues21even, 3: featureValues21odd, 4: featureValues13, 5: featureValues31, 6: featureValues22}
 
 patchRadius = 12
+
+"""
+To Do:
+  [Y & S] Optimize adaBoost?
+  [T] Function that takes a test image and produces all possible 24x24 subwindows
+  [T] Function that runs strong classifier on all subwindows
+  Substep: Function that graphs successes from strong classifier
+  Function that, given results of strong classifier, predicts location of keypoint
+"""
