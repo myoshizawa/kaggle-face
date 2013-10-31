@@ -61,7 +61,7 @@ def demoWeakClassifier(patchSet, type = 12, x1 = 0, y1 = 0, x2 = 2, y2 = 2):
   return weakClassifier(weightedVals, values)
   
   
-def demoStrongClassifier(patchSet, featureList, threshold = -1):
+def demoStrongClassifier(patchSet, featureList, threshold = 'default'):
   """
   Input: patchSet - DataFrame with columns 0, 1, and IntImage
          featureList - list of features desired in strong classifier
@@ -107,7 +107,7 @@ def demoStrongClassifier(patchSet, featureList, threshold = -1):
     strong = strong.append(weak, ignore_index = True)
     
   print 'Performance on Training Patches:'
-  print testClassifier(patchSet, strong, threshold)
+  print runStrong(patchSet, strong, threshold)
   
   return strong
   
@@ -530,6 +530,7 @@ def weakClassifier(weightedVals, values):
     parity = 1 => feature value > threshold are classified as containing the facial keypoint
     parity = -1 => feature value =< threshold are classified as containing the facial keypoint
   """
+  
   featureVals = weightedVals.groupby(values).sum()
   
   # diff calculates how much the error changes if we moved the threshold from the minimum feature value to the current feature value
@@ -569,7 +570,7 @@ def adaBoost(patchSet, numFeatures, weights = 0):
     weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
     weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
   
-  store = pd.HDFStore('crossVal.h5')
+  store = pd.HDFStore('storage.h5')
   
   strong = DataFrame(columns = ['feature', 'error', 'threshold', 'parity', 'alpha'])
   
