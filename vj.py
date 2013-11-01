@@ -112,6 +112,28 @@ def demoStrongClassifier(patchSet, featureList, threshold = 'default'):
   return strong
   
   
+def visualizePred(train, strong, sample, threshold = 'default'):
+  """
+  Input: train - DataFrame containing image pixel values (output of face.readTrain())
+         strong - DataFrame containing strong classifier (output of demoStrongClassifier())
+         sample - Number of a sample in train
+         threshold - Custom threshold level
+  Outputs the image and plots all predictions of strong classifier
+  """
+
+  print 'Acquiring subwindows'
+  sampleSet = testPatches(train['Image'][sample])
+  
+  print 'Obtaining predictions'
+  sampleSet['pred'] = runStrong2(sampleSet, sample, strong, threshold)
+  
+  print 'Plotting results'
+  plt.imshow(train['Image'][sample], cmap=cm.Greys_r)
+  
+  for i in sampleSet[sampleSet['pred'] == True].index:
+    plt.scatter(sampleSet['x'][i],sampleSet['y'][i])
+  
+  
 def visualizeFeature(patchSet, type, x1, y1, x2, y2):
   """
   Input: patchSet with column 'Patch'
@@ -584,7 +606,7 @@ def adaBoost(patchSet, numFeatures, weights = 0):
     error = float('inf')
   
     # retrieve each set of features and determine minimum error
-    for i in xrange(7):
+    for i in xrange(1):
   
       featureVals = store[nameDict[i]]
             
@@ -662,6 +684,83 @@ def runStrong(patchSet, strongClassifier, threshold = 'default'):
   falsePosRate = (patchSet[0] * pred).sum() / float(patchSet[0].sum())
   
   return Series({'error': error, 'detection_rate': detectRate, 'false_positive_rate': falsePosRate})
+  
+  
+def testPatches(image):
+  """
+  Returns all possible subwindows for entered image
+  """
+  patchList = []
+  centerListX = []
+  centerListY = []
+  
+  imageLength = len(image)
+  
+  for i in xrange(patchRadius, imageLength - patchRadius):
+    for j in xrange(patchRadius, imageLength - patchRadius):
+      imageDict = {}
+      
+      imageDict['Patch'] = image[j-patchRadius:j+patchRadius,i-patchRadius:i+patchRadius]
+      
+      centerListX.append(i)
+      centerListY.append(j)
+      patchList.append(imageDict)
+        
+  testPatchSet = DataFrame(patchList)
+  testPatchSet['x'] = centerListX
+  testPatchSet['y'] = centerListY
+  
+  return testPatchSet
+  
+  
+def runStrong2(testSet, sample, strongClassifier, threshold = 'default'):
+  """
+  version of runStrong that calculates features directly, rather than with integral image
+  """
+  
+  # if no threshold inputted, 
+  if threshold == 'default':
+    threshold = strongClassifier['alpha'].sum() / 2
+    
+  print 'Testing with threshold %f' % threshold
+  
+  predictionValues = Series(np.zeros(len(testSet)), index = testSet.index)
+  
+  # for each weak classifier in strong classifier, add weighted value to those classified as containing keypoint
+  for i in strongClassifier.index:
+    type, x1, y1, x2, y2 = strongClassifier['feature'][i]
+    # calculate feature for weak classifier
+    if type == 12:
+      x12 = (x1 + x2)/2
+      featureValues = testSet['Patch'].apply(lambda x: x[y1:y2,x12:x2].sum() - x[y1:y2,x1:x12].sum())
+    elif type == 21:
+      y12 = (y1 + y2)/2
+      featureValues = testSet['Patch'].apply(lambda x: x[y12:y2,x1:x2].sum() - x[y1:y12,x1:x2].sum())
+    elif type == 13:
+      diff = (x2 - x1) / 3
+      x13 = x1 + diff
+      x23 = x13 + diff
+      featureValues = testSet['Patch'].apply(lambda x: x[y1:y2,x1:x13].sum() + x[y1:y2,x23:x2].sum() - x[y1:y2,x13:x23].sum())
+    elif type == 31:
+      diff = (y2 - y1) / 3
+      y13 = y1 + diff
+      y23 = y13 + diff
+      featureValues = testSet['Patch'].apply(lambda x: x[y1:y13,x1:x2].sum() + x[y23:y2,x1:x2].sum() - x[y13:y23,x1:x2].sum())
+    elif type == 22:
+      x12 = (x1 + x2)/2
+      y12 = (y1 + y2)/2
+      featureValues = testSet['Patch'].apply(lambda x: x[y1:y12,x1:x12].sum() + x[y12:y2,x12:x2].sum() - x[y1:y12,x12:x2].sum() - x[y12:y2,x1:x12])
+    # make prediction
+    if strongClassifier['parity'][i] == 1:
+      predictYes = featureValues > strongClassifier['threshold'][i]
+    else:
+      predictYes = featureValues < strongClassifier['threshold'][i]
+    # add alpha value  
+    predictionValues = predictionValues + strongClassifier['alpha'][i] * predictYes
+    
+  # determine predictions (score must be above threshold)
+  return predictionValues > threshold
+
   
     
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
