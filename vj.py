@@ -578,7 +578,7 @@ def updateWeights(weights, correct, beta):
   return weights
 
   
-def adaBoost(patchSet, numFeatures, weights = 0):
+def adaBoost(patchSet, numFeatures, strong = 0, weights = 0):
   """
   Input: patchSet with columns 0, 1
          numFeatures = number of features desired in strong classifier
@@ -586,15 +586,16 @@ def adaBoost(patchSet, numFeatures, weights = 0):
   Output: Strong classifier information in a DataFrame
           last set of weights (can input into later runs to start adaBoost where previous run left off)
   """
-  if weights == 0:
+  if type(weights) == int:
     # initialize weights
     weights = Series(np.ones(len(patchSet)))
     weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
     weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
   
+  if type(strong) == int:
+    strong = DataFrame(columns = ['feature', 'error', 'threshold', 'parity', 'alpha'])
+    
   store = pd.HDFStore('storage.h5')
-  
-  strong = DataFrame(columns = ['feature', 'error', 'threshold', 'parity', 'alpha'])
   
   for j in xrange(numFeatures):
   
@@ -606,7 +607,7 @@ def adaBoost(patchSet, numFeatures, weights = 0):
     error = float('inf')
   
     # retrieve each set of features and determine minimum error
-    for i in xrange(1):
+    for i in xrange(7):
   
       featureVals = store[nameDict[i]]
             
@@ -635,6 +636,9 @@ def adaBoost(patchSet, numFeatures, weights = 0):
     weights = updateWeights(weights, correct, beta)
     
     # add best weak classifier to strong classifier
+    print 'Added feature:'
+    print weak
+    
     weak = weak.append(Series({'feature': feature, 'alpha': alpha}))
     strong = strong.append(weak, ignore_index = True)
     
