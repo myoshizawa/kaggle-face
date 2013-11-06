@@ -5,26 +5,28 @@ import numpy as np
 import face
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-from time import time
+import math
 
 
 def initialize(keypoint = 'left_eye_center'):
   """
+  Returns training data and an initial training set of patches as DataFrames
   Input: keypoint = facial keypoint name (without _x or _y ending)
-  Output: DataFrame with set of (default = 35228) 24x24 pixel training patches
-    Patch records the pixel values in a numpy array
-    Columns 0 and 1 record whether the facial keypoint is present in the patch
-    IntImage has the integral image information in a numpy array
+  Output: 
+    train:
+      DataFrame with training images as numpy arrays and facial keypoint locations
+    patchSet:
+      DataFrame with training patches as numpy arrays of size patchRadius (global var)
+      A 1 in columns 0 and 1 records whether the facial keypoint is not present or present respectively (0 otherwise)
+      IntImage column contains integral image in a numpy array
+  Running time: 54 s
   """
   # read training data from .csv
   print 'Reading training data from train.csv'
   train = face.readTrain()
   # create training patch set (currently finds 1 patch containg keypoint (if possible), and 4 random patches that do not
-  print 'Creating set of patches for %s' % keypoint
-  patchSet = trainingPatches(train, keypoint)
-  # calculate integral image for each patch
-  print 'Calculating integral images'
-  calcIntImage(patchSet)
+  print 'Creating initial set of patches for %s' % keypoint
+  patchSet = trainingPatches(train, keypoint = keypoint)
   """
   # stores training data and training patch set in storage.h5
   storage = pd.HDFStore('storage.h5')
@@ -32,43 +34,39 @@ def initialize(keypoint = 'left_eye_center'):
   storage['patchSet'] = patchSet
   storage.close()
   """
-  return patchSet
+  return train, patchSet
 
-  
-def demoWeakClassifier(patchSet, type = 12, x1 = 0, y1 = 0, x2 = 2, y2 = 2):
+def demoWeakClassifier(patchSet, type, x1, y1, x2, y2):
   """
+  Trains and returns specified weak classifier 
   Input: patchSet = DataFrame with training patches and columns IntImage, 0, 1
          type = 12, 21, 13, 31, or 22 (type of rectangular feature)
          x1, y1 = upper left coordinates
          x2, y2 = bottom right coordinates
-  Output: Weak classifier information for the desired rectangular feature
+  Output: Weak classifier for feature (type, x1, y1, x2, y2) trained on patchSet
+  Running time: 65 ms
   """
   # calculate values of desired feature and save in DataFrame values
-  print 'Calculating values for feature (%d,%d,%d,%d,%d)' % (type,x1,y1,x2,y2)
   values = calcFeature(patchSet, type, x1, y1, x2, y2)
-  
-  # initialize weights
-  weights = Series(np.ones(len(patchSet)))
-  weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
-  weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
   
   # initialize weightedVals
   weightedVals = DataFrame(index = patchSet.index)
-  weightedVals[1] = patchSet[1] * weights
-  weightedVals[0] = patchSet[0] * weights
+  weightedVals[1] = patchSet[1] * 1/float(2 * patchSet[1].sum())
+  weightedVals[0] = patchSet[0] * 1/float(2 * patchSet[0].sum())
   
   # create weak classifier for desired feature
   return weakClassifier(weightedVals, values)
-  
-  
-def demoStrongClassifier(patchSet, featureList, threshold = 'default'):
+
+def demoStrongClassifier(patchSet, featureList, threshold = False):
   """
-  Input: patchSet - DataFrame with columns 0, 1, and IntImage
-         featureList - list of features desired in strong classifier
-         threshold - how lenient the final strong classifier will be (lower value => higher detection rates but also higher false positive rates
-                     default determined by error rates of weak classifiers
-  Output: none
-  Creates a strong classifier based on features in featureList and outputs performance details
+  Trains and returns specified strong classifier
+  Input: patchSet = DataFrame with columns IntImage, 0, 1
+         featureList = list of features in tuple form (order listed matters - weak classifiers trained on samples weighted by previous weak classifiers!)
+         threshold = how lenient the final strong classifier will be (lower value => higher detection rates but also higher false positive rates)
+                     if False, sets to half the sum of the alpha values of weak classifiers
+  Output: strong classifier made up of weak classifiers trained on patchSet
+          also prints performance on patchSet
+  Running time (20 feature classifier): 2.46 s
   """
   # initialize weights
   weights = Series(np.ones(len(patchSet)))
@@ -87,13 +85,12 @@ def demoStrongClassifier(patchSet, featureList, threshold = 'default'):
     # calculate feature values
     values = calcFeature(patchSet, feature[0], feature[1], feature[2], feature[3], feature[4])
     
-    # calculate weak classifier
+    # train weak classifier
     weak = weakClassifier(weightedVals, values)
     
-    if weak['parity'] == 1:
-      classCorrect = values > weak['threshold']
-    else:
-      classCorrect = values < weak['threshold']
+    # determine predictions of weak classifier
+    classCorrect = values * weak['parity'] > weak['threshold'] * weak['parity']
+    
     # determine which samples were predicted correctly
     correct = classCorrect*patchSet[1] + (-classCorrect) * patchSet[0]
           
@@ -106,46 +103,67 @@ def demoStrongClassifier(patchSet, featureList, threshold = 'default'):
     weak = weak.append(Series({'feature': feature, 'alpha': alpha}))
     strong = strong.append(weak, ignore_index = True)
     
-  print 'Performance on Training Patches:'
-  print runStrong(patchSet, strong, threshold)
+  # evaluate strong classifier
+  print strongReport(patchSet, strong, threshold)
   
   return strong
   
   
-def visualizePred(train, strong, sample, threshold = 'default'):
+def visualizePred(image, strong, threshold = False):
   """
-  Input: train - DataFrame containing image pixel values (output of face.readTrain())
-         strong - DataFrame containing strong classifier (output of demoStrongClassifier())
-         sample - Number of a sample in train
-         threshold - Custom threshold level
-  Outputs the image and plots all predictions of strong classifier
+  Plots all positive predictions of classifier over image
+  Input: image = numpy array with pixel values
+         strong = single or list of DataFrames containing strong classifier (output of demoStrongClassifier())
+         threshold = singe or list of thresholds
+  Outputs the image and plots all predictions of strong classifier (red is prediction with highest score)
+  Running time: 2.47 s
   """
-
+  # find all subwindows from image
   print 'Acquiring subwindows'
-  sampleSet = testPatches(train['Image'][sample])
+  sampleSet = getSubwindows(image)
   
-  print 'Obtaining predictions'
-  sampleSet['pred'] = runStrong2(sampleSet, sample, strong, threshold)
+  # if cascade given as input
+  if isinstance(strong, list):
+    # if threshold == False, set each threshold to default (1/2 sum of alpha values)
+    if not threshold:
+      print 'Default thresholds are:'
+      print [threshold.append(strong['alpha'].sum() / 2) for strong in threshold]
+    
+    # obtain predictions
+    pred, predVals = cascadePred(sampleSet, strong, threshold)
+  # if single strong classifier given as input  
+  else:
+    pred, predVals = strongPred(sampleSet, strong, threshold)
+    
+  maxId = predVals.idxmax()
+  numDetections = pred.sum()
+  numSamples = len(sampleSet)
   
-  print 'Plotting results'
-  plt.imshow(train['Image'][sample], cmap=cm.Greys_r)
+  print 'Number of detections: %d / %d' % (numDetections, numSamples)
   
-  for i in sampleSet[sampleSet['pred'] == True].index:
-    plt.scatter(sampleSet['x'][i],sampleSet['y'][i])
+  # print image and positive detections
+  plt.imshow(image, cmap=cm.Greys_r)
   
+  for i in sampleSet[pred == True].index:
+    plt.scatter(sampleSet['x'][i], sampleSet['y'][i], color = 'blue')
+  
+  plt.scatter(sampleSet['x'][maxId],sampleSet['y'][maxId], color = 'red')
+
   
 def visualizeFeature(patchSet, type, x1, y1, x2, y2):
   """
-  Input: patchSet with column 'Patch'
-         target feature in the form type, x1, y1, x2, y2
+  Input: patchSet = DataFrame with column 'Patch'
+         type, x1, y1, x2, y2 = target feature
   Output: None
   Prints the average of all patches that contains the keypoint and the outlines of the identified feature
+  Running time: 50.3 ms
   """
-
+  # calculate average patch of all patches containing facial keypoint
   averagePatch = patchSet[patchSet[1] == 1]['Patch'].sum() / len(patchSet[patchSet[1]==1])
   
   plt.imshow(averagePatch, cmap=cm.Greys_r, interpolation='nearest')
   
+  # plot feature rectangles
   plt.plot([x1,x2],[y1,y1])
   plt.plot([x1,x2],[y2,y2])
   plt.plot([x1,x1],[y1,y2])
@@ -176,36 +194,46 @@ def visualizeFeature(patchSet, type, x1, y1, x2, y2):
     plt.plot([x12,x12],[y1,y2])
     plt.plot([x1,x2],[y12,y12])
     
-  
-def featureValues(patchSet):
+def calcFeatureValues(patchSet):
   """
   Input: patchSet - DataFrame with column IntImage
   Output: none
   Calculates features for each integral image in patchSet and stores them in a local h5 storage file named storage.h5
-  Features will be stored in 7 different data frames, named according to nameDict: '12-0', '12-1', '21-0', '21-1', '13', '31', '22'
-  This process will likely take about 2 hours and will require a decent amount of memory
+  Features will be stored in 5 different data frames, named according to nameDict: '12', '21', '13', '31', '22'
+  This process will likely take about 2 hours
   """
 
   storage = pd.HDFStore('storage.h5')
-  for i in xrange(7):
-    # calculate feature values
-    values = featureDict[i](patchSet)
-    # store feature values in storage.h5
-    storage[nameDict[i]] = values
+  
+  storage['12'] = featureValues(patchSet, 12)
+  print 'Features 12 completed'
+  storage['21'] = featureValues(patchSet, 21)
+  print 'Features 21 completed'
+  storage['13'] = featureValues(patchSet, 13)
+  print 'Features 13 completed'
+  storage['31'] = featureValues(patchSet, 31)
+  print 'Features 31 completed'
+  storage['22'] = featureValues(patchSet, 22)
+  print 'Features 22 completed'
+  
   storage.close()
 
   
 ################################################################
 
-def trainingPatches(data, keypoint, numWithout = 4):
+def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_eye_center', numWithout = 1):
   """
-  Returns a 3-column DataFrame
+  Input: data = training data with columns 'Image' and location of keypoint
+         strong = single or cascade (list) of strong classifier DataFrames (new patches will only be selected if they test positive)
+         threshold = threshold or list of thresholds for strong classifiers
+         keypoint = facial keypoint
+         numWithout = number of patches selected from each image that do not contain keypoint (default is 1)
+  Output: 4-column DataFrame of patches
     Patch: contains square patches (side length = 2 * patchRadius) as a numpy array
     1: a 1 in this column means facial keypoint present in patch (0 otherwise)
     0: a 1 in this column means facial keypoint not present (0 otherwise)
-  Records numWith patches containing keypoint and numWithout patches that do not contain keypoint
-  Does not record patches if keypoint is too close (within patchRadius/2) to the boundary of image or sample has no keypoint information
-  Containing the keypoint means the patch center is within patchRadius/2 of the keypoint location (taxi cab metric)
+    IntImage: integral image of patches
+  Does not record patches containing keypoint if keypoint is too close (within patchRadius) to the boundary of image or sample has no keypoint information
   Not containing the keypoint means the patch center is more than patchRadius from the keypoint location (taxi cab metric)
   """
 
@@ -223,41 +251,51 @@ def trainingPatches(data, keypoint, numWithout = 4):
     # if keypoint location is not present, report
     if np.isnan(keypointLocX) or np.isnan(keypointLocY):
       print 'Sample %s does not have %s data' % (sample, keypoint)
-      
+            
       for i in range(numWithout):
-      
-        imageDict = {}
-      
-        contained = True
-      
-        patchCenterX = random.randint(patchRadius,95-patchRadius)
-        patchCenterY = random.randint(patchRadius,95-patchRadius)
-        
-        imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
-      
+        # if no strong classifier, select patch randomly
+        if not strong:
+          patchCenterX = random.randint(patchRadius,95-patchRadius)
+          patchCenterY = random.randint(patchRadius,95-patchRadius)
+        # if strong classifier, select patch that is classified positive by the strong classifier
+        else:
+          flag = True
+          while flag:
+            patchCenterX = random.randint(patchRadius,95-patchRadius)
+            patchCenterY = random.randint(patchRadius,95-patchRadius)
+            patch = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
+            if predPatch(patch, strong, threshold):
+              flag = False
+        imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
         patchList.append(imageDict)
         keypointYes.append(0)
-        keypointNo.append(1)
-      
+        keypointNo.append(1)    
       continue
     
     # if feature location is present, record patches that do not contain feature
     for i in range(numWithout):
-    
-      imageDict = {}
-      
-      contained = True
-      
-      # ensure that patch does not contain feature
-      while contained:
-        patchCenterX = random.randint(patchRadius,95-patchRadius)
-        patchCenterY = random.randint(patchRadius,95-patchRadius)
+      # if no strong classifier, select patch so that it does not contain keypoint
+      if not strong:
+        contained = True
         
-        if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
-          contained = False
-          
-      imageDict['Patch'] = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
+        # ensure that patch does not contain feature
+        while contained:
+          patchCenterX = random.randint(patchRadius,95-patchRadius)
+          patchCenterY = random.randint(patchRadius,95-patchRadius)
+          if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
+            contained = False
+      # if strong classifier, select patch so that it does not contain keypoint and is classified positive by strong classifier
+      else:
+        flag = True
+        while flag:
+          patchCenterX = random.randint(patchRadius,95-patchRadius)
+          patchCenterY = random.randint(patchRadius,95-patchRadius)
+          if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
+            patch = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
+            if predPatch(patch, strong, threshold):
+              flag = False
       
+      imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
       patchList.append(imageDict)
       keypointNo.append(1)
       keypointYes.append(0)
@@ -277,10 +315,7 @@ def trainingPatches(data, keypoint, numWithout = 4):
       continue
   
     # if feature is not too close to boundary, record patch containing feature
-        
-    imageDict = {}
-    imageDict['Patch'] = data['Image'][sample][keypointLocY - patchRadius:keypointLocY + patchRadius, keypointLocX - patchRadius:keypointLocX + patchRadius]
-    
+    imageDict = {'Patch': data['Image'][sample][keypointLocY - patchRadius:keypointLocY + patchRadius, keypointLocX - patchRadius:keypointLocX + patchRadius]}
     patchList.append(imageDict)
     keypointYes.append(1)
     keypointNo.append(0)
@@ -290,6 +325,9 @@ def trainingPatches(data, keypoint, numWithout = 4):
   trainingSet[1] = keypointYes
   trainingSet[0] = keypointNo
   
+  # calculate integral images
+  calcIntImage(trainingSet)
+  
   return trainingSet
   
   
@@ -297,34 +335,29 @@ def calcIntImage(trainingSet):
   """
   Reads in a DataFrame with a column 'Patch' and returns DataFrame with a new column containing integral images
   """
-  ii = []
-  
-  for sample in trainingSet.index:
-    ii.append(integralImage(trainingSet['Patch'][sample]))
     
-  trainingSet['IntImage'] = ii
+  trainingSet['IntImage'] = trainingSet['Patch'].apply(integralImage)
 
-  
-def integralImage(patch):
+def integralImage(patch, normalize = True):
   """
-  This function computes the integral image. 
+  This function computes the integral image after normalizing the original patch 
   INPUT: An NxN numpy array representing an image
-  OUTPUT: The corresponding integral image 
+  OUTPUT: The corresponding normalized integral image 
   where the (x,y) coordinate gives you the sum of the pixels in the rectangle between (0,0) and (x,y)
   note that if x or y is 0, the integral image is 0
+  Running time: 80 ms
   """
  
   N=len(patch)
-  s = np.zeros((N+1,N+1), dtype=np.int32)
-  int_im = np.zeros((N+1,N+1), dtype=np.int32)
-    
-  for x in xrange(1,N+1):
-    for y in xrange(1,N+1):
-      s[x][y] = s[x][y-1] + patch[x-1][y-1]
-      int_im[x][y] = int_im[x-1][y] + s[x][y]
- 	 
-  return int_im
-
+  int_im = np.zeros((N+1,N+1))
+  
+  int_im[1:,1:] = np.cumsum(np.cumsum(patch, axis=0), axis=1)
+  
+  if normalize:
+    var_sqrt = math.sqrt(math.fabs(math.pow(int_im[N][N]/patch.size,2) - ((patch*patch).sum() / (patch.size))))
+    return int_im / var_sqrt
+  else:
+    return int_im
 
 def feature21(x1,y1,x2,y2,ii):
   """
@@ -340,7 +373,6 @@ def feature21(x1,y1,x2,y2,ii):
   
   return f6 - f5 - f5 + f4 - f3 + f2 + f2 - f1
   
-
 def feature12(x1,y1,x2,y2,ii):
   """
   2-features parted horizontally
@@ -355,7 +387,6 @@ def feature12(x1,y1,x2,y2,ii):
   f6 = ii[y2,x2]
   
   return f6 - f5 - f5 + f4 - f3 + f2 + f2 - f1
-  
   
 def feature31(x1,y1,x2,y2,ii):
   """
@@ -394,8 +425,7 @@ def feature13(x1,y1,x2,y2,ii):
   f8 = ii[y2,x2]
   
   return f8 - f7 - f7 + f6 + f6 - f5 - f4 + f3 + f3 - f2 - f2 + f1
-  
-  
+    
 def feature22(x1,y1,x2,y2,ii):
   """
   4-features
@@ -415,135 +445,33 @@ def feature22(x1,y1,x2,y2,ii):
   
   return f9 - f8 - f8 + f7 - f6 - f6 + f5 + f5 + f5 + f5 - f4 - f4 + f3 - f2 - f2 + f1
   
-  
-
 def calcFeature(patchSet, type, x1, y1, x2, y2):
   """
   Takes a dataFrame with integral images (under column 'IntImage') and adds a column '(type,x1,y1,x2,y2)' with the feature values
   """
   
-  return patchSet['IntImage'].apply(lambda x: featureTypes[type](x1, y1, x2, y2, x)).astype(np.int32)
+  return patchSet['IntImage'].apply(lambda x: featureTypes[type](x1, y1, x2, y2, x))
   
-  
-def featureValues12even(patchSet):
+def featureValues(patchSet, type):
   """
-  Calculates values for features using the integral images in patchSet
-  2-rectangle horizontal features with even top-left x-coordinate
+  Input: patchSet = DataFrame of patches as numpy arrays
+         type = type of feature (12, 21, 13, 31, or 22)
+  Returns 'all' feature values of given type for patches in patchSet
   """
   patchSize = len(patchSet['IntImage'][0])
   
   values = DataFrame(index = patchSet.index)
-
+  
+  spacingX = (type % 10) * 2
+  spacingY = int(type / 10) * 2
+  
   for a in xrange(0,patchSize-1,2):
-    for b in xrange(patchSize-1):
-      for x in xrange(a+4,patchSize,4):
-        for y in xrange(b+2,patchSize, 2):
-          values[(12,a,b,x,y)] = calcFeature(patchSet,12,a,b,x,y)
-  return values
-  
-
-def featureValues12odd(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  2-rectangle horizontal features with odd top-left x-coordinate
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(1,patchSize-1,2):
-    for b in xrange(patchSize-1):
-      for x in xrange(a+4,patchSize,4):
-        for y in xrange(b+2,patchSize,2):  
-          values[(12,a,b,x,y)] = calcFeature(patchSet,12,a,b,x,y)
-  return values
-  
-  
-def featureValues21even(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  2-rectangle vertical features with even top-left x-coordinate
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(patchSize-1):
     for b in xrange(0,patchSize-1,2):
-      for x in xrange(a+2,patchSize,2):
-        for y in xrange(b+4,patchSize,4):  
-          values[(21,a,b,x,y)] = calcFeature(patchSet,21,a,b,x,y)
+      for x in xrange(a+spacingX,patchSize,spacingX):
+        for y in xrange(b+spacingY,patchSize, spacingY):
+          values[(type,a,b,x,y)] = calcFeature(patchSet,type,a,b,x,y)
   return values
-
-
-def featureValues21odd(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  2-rectangle vertical features with odd top-left x-coordinate
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(patchSize-1):
-    for b in xrange(1,patchSize-1,2):
-      for x in xrange(a+2,patchSize,2):
-        for y in xrange(b+4,patchSize,4):
-          values[(21,a,b,x,y)] = calcFeature(patchSet,21,a,b,x,y)
-  return values
-  
-
-def featureValues13(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  3-rectangle horizontal features
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(patchSize-1):
-    for b in xrange(patchSize-1):
-      for x in xrange(a+6,patchSize,6):
-        for y in xrange(b+2,patchSize,2):   
-          values[(13,a,b,x,y)] = calcFeature(patchSet,13,a,b,x,y)
-  return values
-  
-  
-def featureValues31(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  3-rectangle vertical features
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(patchSize-1):
-    for b in xrange(patchSize-1):
-      for x in xrange(a+2,patchSize,2):
-        for y in xrange(b+6,patchSize,6):
-          values[(31,a,b,x,y)] = calcFeature(patchSet,31,a,b,x,y)
-  return values
-  
-  
-def featureValues22(patchSet):
-  """
-  Calculates values for features using the integral images in patchSet
-  4-rectangle features
-  """
-  patchSize = len(patchSet['IntImage'][0])
-  
-  values = DataFrame(index = patchSet.index)
-
-  for a in xrange(patchSize-1):
-    for b in xrange(patchSize-1):
-      for x in xrange(a+4,patchSize,4):
-        for y in xrange(b+4,patchSize,4):
-          values[(22,a,b,x,y)] = calcFeature(patchSet,22,a,b,x,y)
-  return values
-            
-  
+    
 def weakClassifier(weightedVals, values):
   """
   Input: patchSet is a DataFrame with columns 1, 0, and 'Weights', and '(type,x1,y1,x2,y2)'
@@ -568,7 +496,6 @@ def weakClassifier(weightedVals, values):
   else:
     return Series({'error': negError, 'threshold': diff.idxmax(), 'parity': -1})
 
-
 def updateWeights(weights, correct, beta):
   """
   Updates weights after an interation of adaBoost
@@ -578,7 +505,7 @@ def updateWeights(weights, correct, beta):
   return weights
 
   
-def adaBoost(patchSet, numFeatures, strong = 0, weights = 0):
+def adaBoost(patchSet, numFeatures, strong = False):
   """
   Input: patchSet with columns 0, 1
          numFeatures = number of features desired in strong classifier
@@ -586,14 +513,17 @@ def adaBoost(patchSet, numFeatures, strong = 0, weights = 0):
   Output: Strong classifier information in a DataFrame
           last set of weights (can input into later runs to start adaBoost where previous run left off)
   """
-  if type(weights) == int:
+  if not strong:
     # initialize weights
     weights = Series(np.ones(len(patchSet)))
     weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
     weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
-  
-  if type(strong) == int:
+    
+    # initialize strong classifier DataFrame
     strong = DataFrame(columns = ['feature', 'error', 'threshold', 'parity', 'alpha'])
+  else:
+    # determine weights from previous weak classifiers in strong
+    weights = getWeights(patchSet, strong)
     
   store = pd.HDFStore('storage.h5')
   
@@ -607,32 +537,31 @@ def adaBoost(patchSet, numFeatures, strong = 0, weights = 0):
     error = float('inf')
   
     # retrieve each set of features and determine minimum error
-    for i in xrange(7):
+    for i in xrange(5):
   
       featureVals = store[nameDict[i]]
-            
-      errorVal = featureVals.apply(lambda x: weakClassifier(weightedVals, x))
+
+      # train weak classifiers on every feature in featureVals
+      weaks = featureVals.apply(lambda x: weakClassifier(weightedVals, x))
       
-      curFeature = errorVal.ix['error',:].idxmin()
-      curError = errorVal[curFeature]['error']
+      curFeature = weaks.ix['error',:].idxmin()
+      curError = weaks[curFeature]['error']
       
       # keep track of feature that provides minimum error, its weak classifier, and which samples were classified correctly
       if curError < error:
         feature = curFeature
         error = curError
-        weak = errorVal[feature]
+        weak = weaks[feature]
         
         # determine which samples were classified as containing feature by weak classifier
-        if weak['parity'] == 1:
-          classCorrect = featureVals[feature] > weak['threshold']
-        else:
-          classCorrect = featureVals[feature] < weak['threshold']
+        classCorrect = featureVals[feature] * weak['parity'] > weak['threshold'] * weak['parity']
+        
         # determine which samples were correctly classified by weak classifier
         correct = classCorrect*patchSet[1] + (-classCorrect) * patchSet[0]
-          
+       
     beta = error / (1 - error)
     alpha = np.log(1/beta)
-    # update weights
+    # update weights (reduces weight for correctly classified samples and normalizes)
     weights = updateWeights(weights, correct, beta)
     
     # add best weak classifier to strong classifier
@@ -644,55 +573,12 @@ def adaBoost(patchSet, numFeatures, strong = 0, weights = 0):
     
   store.close()
     
-  return strong, weights
+  return strong
   
-  
-def runStrong(patchSet, strongClassifier, threshold = 'default'):
+def getSubwindows(image):
   """
-  Input: patchSet DataFrame with 1, 0, and IntImage columns
-         strongClassifier DataFrame with alpha, feature, parity, threshold columns
-         threshold = custom threshold for strong classifier (defaults to threshold = 1/2 sum of alpha values)
-  Output: error, detection rate, and false positive rate of strong classifier
-  """
-  
-  # if no threshold inputted, 
-  if threshold == 'default':
-    threshold = strongClassifier['alpha'].sum() / 2
-    
-  print 'Testing with threshold %f' % threshold
-  
-  predictionValues = Series(np.zeros(len(patchSet)), index = patchSet.index)
-  
-  # for each weak classifier in strong classifier, add weighted value to those classified as containing keypoint
-  for i in strongClassifier.index:
-    type, x1, y1, x2, y2 = strongClassifier['feature'][i]
-    # calculate feature for weak classifier
-    featureValues = calcFeature(patchSet, type, x1, y1, x2, y2)
-    # make prediction
-    if strongClassifier['parity'][i] == 1:
-      predictYes = featureValues > strongClassifier['threshold'][i]
-    else:
-      predictYes = featureValues < strongClassifier['threshold'][i]
-    # add alpha value  
-    predictionValues = predictionValues + strongClassifier['alpha'][i] * predictYes
-    
-  # determine predictions (score must be above threshold)
-  pred = (predictionValues > threshold)
-  # actual results
-  actual = (patchSet[1] == 1)
-  # error rate
-  error = (pred != actual).sum() / float(len(patchSet))
-  # detection rate (percent of patches containing keypoint correctly classified as so)
-  detectRate = (patchSet[1] * pred).sum() / float(patchSet[1].sum())
-  # false positive rate (percent of patches not containing keypoint classified as containing it)
-  falsePosRate = (patchSet[0] * pred).sum() / float(patchSet[0].sum())
-  
-  return Series({'error': error, 'detection_rate': detectRate, 'false_positive_rate': falsePosRate})
-  
-  
-def testPatches(image):
-  """
-  Returns all possible subwindows for entered image
+  Input: pixel values of image as numpy array
+  Output: DataFrame containing all patches of size patchRadius (global var), center of patch, and their integral images
   """
   patchList = []
   centerListX = []
@@ -700,6 +586,7 @@ def testPatches(image):
   
   imageLength = len(image)
   
+  # add patches to list
   for i in xrange(patchRadius, imageLength - patchRadius):
     for j in xrange(patchRadius, imageLength - patchRadius):
       imageDict = {}
@@ -709,75 +596,261 @@ def testPatches(image):
       centerListX.append(i)
       centerListY.append(j)
       patchList.append(imageDict)
-        
+
+  # convert output to a DataFrame
   testPatchSet = DataFrame(patchList)
   testPatchSet['x'] = centerListX
   testPatchSet['y'] = centerListY
   
+  calcIntImage(testPatchSet)
+  
   return testPatchSet
   
   
-def runStrong2(testSet, sample, strongClassifier, threshold = 'default'):
+def findThreshold(patchSet, strong, minDetectionRate):
   """
-  version of runStrong that calculates features directly, rather than with integral image
+  Determines (approx.) maximum threshold that produces a detection rate > user inputted rate
+  Input: patchSet = DataFrame with patches
+         strong = strong classifier DataFrame
+         minDetectionRate = the minimum detection rate desired (in decimal form)
   """
   
-  # if no threshold inputted, 
-  if threshold == 'default':
-    threshold = strongClassifier['alpha'].sum() / 2
+  # set initial threshold
+  threshold = strong['alpha'].sum()
+  
+  numSuccesses = 0
+  spacingChange = {0: 10, 1: 1, 2: 0.1, 3: 0.01}
+  
+  flag = True
+  
+  while flag:
+    report = strongReport(patchSet, strong, threshold)
+    if report['detect_rate'] < minDetectionRate:
+      threshold -= spacingChange[numSuccesses]
+    elif numSuccesses == 3:
+      print strongReport(patchSet, strong, threshold)
+      return threshold
+    else:
+      threshold += spacingChange[numSuccesses]
+      numSuccesses += 1
+      
+      
+def getWeights(patchSet, strong):
+  """
+  Returns adaBoost weights on samples in patchSet after using strong classifier
+  Input: patchSet = DataFrame with columns IntImage, 0, 1
+         strong = strong classifier DataFrame
+  Output: Series containing weights
+  """
+  # initialize weights
+  weights = Series(np.ones(len(patchSet)))
+  weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
+  weights[patchSet[1]==1] = weights[patchSet[1]==1] / (2 * patchSet[1].sum())
+  
+  for i in strong.index:
+  
+    # calculate feature values
+    type, x1, y1, x2, y2 = strong['feature'][i]
+    values = calcFeature(patchSet, type, x1, y1, x2, y2)
     
-  print 'Testing with threshold %f' % threshold
+    # determine predictions of weak classifier
+    classCorrect = values * strong['parity'][i] > strong['threshold'][i] * strong['parity'][i]
+    
+    # determine which samples were predicted correctly
+    correct = classCorrect*patchSet[1] + (-classCorrect) * patchSet[0]
+    
+    # determine beta from alpha value
+    beta = np.exp(-strong['alpha'][i])
+
+    # update weights
+    weights = updateWeights(weights, correct, beta)
   
-  predictionValues = Series(np.zeros(len(testSet)), index = testSet.index)
+  return weights
+  
+  
+def runStrong(patchSet, strong):
+  """
+  Runs strong classifier on set of patches and returns predictions
+  Input: patchSet DataFrame with 1, 0, and IntImage columns
+         strong DataFrame with alpha, feature, parity, threshold columns
+         threshold = custom threshold for strong classifier (defaults to threshold = 1/2 sum of alpha values)
+  Output: error, detection rate, and false positive rate of strong classifier
+  Running time: 1.1 s
+  """
+  
+  predVals = Series(np.zeros(len(patchSet)), index = patchSet.index)
   
   # for each weak classifier in strong classifier, add weighted value to those classified as containing keypoint
-  for i in strongClassifier.index:
-    type, x1, y1, x2, y2 = strongClassifier['feature'][i]
+  for i in strong.index:
+    type, x1, y1, x2, y2 = strong['feature'][i]
     # calculate feature for weak classifier
-    if type == 12:
-      x12 = (x1 + x2)/2
-      featureValues = testSet['Patch'].apply(lambda x: x[y1:y2,x12:x2].sum() - x[y1:y2,x1:x12].sum())
-    elif type == 21:
-      y12 = (y1 + y2)/2
-      featureValues = testSet['Patch'].apply(lambda x: x[y12:y2,x1:x2].sum() - x[y1:y12,x1:x2].sum())
-    elif type == 13:
-      diff = (x2 - x1) / 3
-      x13 = x1 + diff
-      x23 = x13 + diff
-      featureValues = testSet['Patch'].apply(lambda x: x[y1:y2,x1:x13].sum() + x[y1:y2,x23:x2].sum() - x[y1:y2,x13:x23].sum())
-    elif type == 31:
-      diff = (y2 - y1) / 3
-      y13 = y1 + diff
-      y23 = y13 + diff
-      featureValues = testSet['Patch'].apply(lambda x: x[y1:y13,x1:x2].sum() + x[y23:y2,x1:x2].sum() - x[y13:y23,x1:x2].sum())
-    elif type == 22:
-      x12 = (x1 + x2)/2
-      y12 = (y1 + y2)/2
-      featureValues = testSet['Patch'].apply(lambda x: x[y1:y12,x1:x12].sum() + x[y12:y2,x12:x2].sum() - x[y1:y12,x12:x2].sum() - x[y12:y2,x1:x12])
+    featureVals = calcFeature(patchSet, type, x1, y1, x2, y2)
     # make prediction
-    if strongClassifier['parity'][i] == 1:
-      predictYes = featureValues > strongClassifier['threshold'][i]
+    if strong['parity'][i] == 1:
+      predictYes = featureVals > strong['threshold'][i]
     else:
-      predictYes = featureValues < strongClassifier['threshold'][i]
+      predictYes = featureVals < strong['threshold'][i]
     # add alpha value  
-    predictionValues = predictionValues + strongClassifier['alpha'][i] * predictYes
+    predVals += strong['alpha'][i] * predictYes
     
+  return predVals
+
+
+def strongReport(patchSet, strong, threshold = False):
+  """
+  Runs strong classifier on set of patches and returns error rate, detection rate, and false positive rate
+  Input: patchSet = DataFrame of patches
+         strong = strong classifier DataFrame
+         threshold = custom threshold for strong classifier (default will be 1/2 sum of alpha values)
+  Output: Series containing error, detect_rate, and false_positive_rate
+  """
+  # if threshold is False, set threshold to default (1/2 sum of alpha values)
+  if not threshold:
+    threshold = strong['alpha'].sum() / 2
+    print 'Testing with default threshold %f' % threshold
+    
+  # obtain scores from strong classifier
+  predVals = runStrong(patchSet, strong)
+  
   # determine predictions (score must be above threshold)
-  return predictionValues > threshold
+  pred = (predVals > threshold)
+  
+  # actual results
+  actual = (patchSet[1] == 1)
+  # error rate
+  error = (pred != actual).sum() / float(len(patchSet))
+  # detection rate (percent of patches containing keypoint correctly classified as so)
+  detect = (patchSet[1] * pred).sum() / float(patchSet[1].sum())
+  # false positive rate (percent of patches not containing keypoint classified as containing it)
+  falsePos = (patchSet[0] * pred).sum() / float(patchSet[0].sum())
+  
+  return Series({'error': error, 'detect_rate': detect, 'false_positive_rate': falsePos})
+  
+  
+def strongPred(patchSet, strong, threshold = False):
+  """
+  Runs strong classifier on set of patches and returns predictions and highest scoring sample
+  Input: patchSet = DataFrame of patches
+         strong = strong classifier DataFrame
+         threshold = custom threshold for strong classifier (default will be 1/2 sum of alpha values)
+  Output: Series of bools containing predictions, id value of highest scoring sample
+  """
+  
+  # if threshold is False, set threshold to default (1/2 sum of alpha values)
+  if not threshold:
+    threshold = strong['alpha'].sum() / 2
+    print 'Testing with default threshold %f' % threshold
+  
+  # obtain scores from strong classifier
+  predVals = runStrong(patchSet, strong)
+  
+  # return bool of predictions and value of highest scoring prediction
+  return predVals > threshold, predVals
+
 
   
+def cascadePred(patchSet, cascade, thresholds = False):
+  """
+  Runs cascade of strong classifiers and returns predictions on patchSet
+  Input: patchSet = DataFrame of patches
+         cascade = list of strong classfiiers
+         thresholds = list of threshold values
+  Output: predictions by cascade and highest scoring sample
+  """
+  # if thresholds is False, set to default
+  if not thresholds:
+    thresholds = []
+    for strong in cascade:
+      thresholds.append(strong['alpha'].sum() / 2)
+
+  # patches to be tested by subsequent classifier
+  remainingPatches = patchSet
+  
+  # records the score given by strong classifier
+  predVals = Series(np.zeros(len(patchSet)), index = patchSet.index)
+  
+  # each strong classifier makes predictions, update scores, repeat only on positive predictions
+  for i in xrange(len(cascade)):
+    classifiedYes, vals = strongPred(remainingPatches, cascade[i], thresholds[i])
+    predVals = predVals.add(vals, fill_value = 0)
+    remainingPatches = remainingPatches.ix[classifiedYes]
+  
+  # positive predictions are the remaining patches
+  pred = patchSet.index.isin(remainingPatches.index)
     
+  return pred, predVals
+
+  
+def cascadeReport(patchSet, cascade, thresholds = False):
+  """
+  Runs cascade of strong classifiers and returns error rate, detection rate, and false positive rate
+  Input: patchSet = DataFrame of patches
+         cascade = list of strong classfiiers
+         thresholds = list of threshold values
+  Output: Series containing error, detection_rate, and false_positive_rate
+  """
+  # if thresholds is False, set to default
+  if not thresholds:
+    thresholds = []
+    for strong in cascade:
+      thresholds.append(strong['alpha'].sum() / 2)
+
+  # patches to be tested by subsequent classifier
+  remainingPatches = patchSet
+  
+  # each strong classifier makes predictions, repeat only on positive predictions
+  for i in xrange(len(cascade)):
+    classifiedYes, vals = strongPred(remainingPatches, cascade[i], thresholds[i])
+    remainingPatches = remainingPatches.ix[classifiedYes]
+  
+  # positive predictions are the remaining patches  
+  pred = patchSet.index.isin(remainingPatches.index)
+
+  actual = (patchSet[1] == 1)
+  error = (pred != actual).sum() / float(len(patchSet))
+  detectRate = (patchSet[1] * pred).sum() / float(patchSet[1].sum())
+  falsePosRate = (patchSet[0] * pred).sum() / float(patchSet[0].sum())
+  
+  return Series({'error': error, 'detection_rate': detectRate, 'false_positive_rate': falsePosRate})
+  
+  
+def predPatch(patch, cascade, thresholds = False):
+  """
+  Input: patch = numpy array containing pixel values
+         cascade = strong classifier DataFrame with columns feature, parity, threshold, and alpha
+         threshold = custom threshold for strong classifier
+  Returns True/False whether cascade classifies patch as containing facial keypoint
+  """
+  # if cascade and thresholds are not lists, make them lists
+  if not isinstance(cascade, list):
+    cascade = [cascade]
+    
+    if thresholds:
+      thresholds = [thresholds]
+  
+  # if thresholds is False, set to defaults
+  if not thresholds:
+    thresholds = []
+    for strong in cascade:
+      thresholdList.append(strong['alpha'].sum() / 2)
+
+  # determine integral image for patch
+  ii = integralImage(patch)
+  
+  for i in xrange(len(cascade)):
+    # determine feature values corresponding to weak classifiers
+    values = cascade[i]['feature'].apply(lambda x: featureTypes[x[0]](x[1], x[2], x[3], x[4], ii))
+    # make predictions for each weak classifier
+    predictions = values * cascade[i]['parity'] > cascade[i]['threshold'] * cascade[i]['parity']
+    # add up relevant alpha values
+    score = (cascade[i]['alpha'] * predictions).sum()
+    # return false if below threshold, else continue to next strong classifier
+    if score <= thresholds[i]:
+      return False
+  
+  return True
+
+
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
-nameDict = {0: '12-0', 1: '12-1', 2: '21-0', 3: '21-1', 4: '13', 5: '31', 6: '22'}
-featureDict = {0: featureValues12even, 1: featureValues12odd, 2: featureValues21even, 3: featureValues21odd, 4: featureValues13, 5: featureValues31, 6: featureValues22}
-
+nameDict = {0: '12', 1: '21', 2: '13', 3: '31', 4: '22'}
 patchRadius = 12
-
-"""
-To Do:
-  [Y & S] Optimize adaBoost?
-  [T] Function that takes a test image and produces all possible 24x24 subwindows
-  [T] Function that runs strong classifier on all subwindows
-  Substep: Function that graphs successes from strong classifier
-  Function that, given results of strong classifier, predicts location of keypoint
-"""
