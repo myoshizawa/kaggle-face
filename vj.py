@@ -125,9 +125,12 @@ def visualizePred(image, strong, threshold = False):
   # if cascade given as input
   if isinstance(strong, list):
     # if threshold == False, set each threshold to default (1/2 sum of alpha values)
-    if not threshold:
+    if not isinstance(threshold, list):
       print 'Default thresholds are:'
-      print [threshold.append(strong['alpha'].sum() / 2) for strong in threshold]
+      threshold = []
+      for strong in threshold:
+        threshold.append(strong['alpha'].sum() / 2)
+        print threshold
     
     # obtain predictions
     pred, predVals = cascadePred(sampleSet, strong, threshold)
@@ -260,6 +263,7 @@ def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_ey
         # if strong classifier, select patch that is classified positive by the strong classifier
         else:
           flag = True
+          
           while flag:
             patchCenterX = random.randint(patchRadius,95-patchRadius)
             patchCenterY = random.randint(patchRadius,95-patchRadius)
@@ -829,10 +833,10 @@ def predPatch(patch, cascade, thresholds = False):
       thresholds = [thresholds]
   
   # if thresholds is False, set to defaults
-  if not thresholds:
+  if not isinstance(thresholds,list):
     thresholds = []
     for strong in cascade:
-      thresholdList.append(strong['alpha'].sum() / 2)
+      thresholds.append(strong['alpha'].sum() / 2)
 
   # determine integral image for patch
   ii = integralImage(patch)
