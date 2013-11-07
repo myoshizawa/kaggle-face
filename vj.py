@@ -57,7 +57,7 @@ def demoWeakClassifier(patchSet, type, x1, y1, x2, y2):
   # create weak classifier for desired feature
   return weakClassifier(weightedVals, values)
 
-def demoStrongClassifier(patchSet, featureList, threshold = False):
+def demoStrongClassifier(patchSet, featureList, threshold = None):
   """
   Trains and returns specified strong classifier
   Input: patchSet = DataFrame with columns IntImage, 0, 1
@@ -109,7 +109,7 @@ def demoStrongClassifier(patchSet, featureList, threshold = False):
   return strong
   
   
-def visualizePred(image, strong, threshold = False):
+def visualizePred(image, strong, threshold = None):
   """
   Plots all positive predictions of classifier over image
   Input: image = numpy array with pixel values
@@ -122,21 +122,14 @@ def visualizePred(image, strong, threshold = False):
   print 'Acquiring subwindows'
   sampleSet = getSubwindows(image)
   
-  # if cascade given as input
-  if isinstance(strong, list):
-    # if threshold == False, set each threshold to default (1/2 sum of alpha values)
-    if not isinstance(threshold, list):
-      print 'Default thresholds are:'
-      threshold = []
-      for strong in threshold:
-        threshold.append(strong['alpha'].sum() / 2)
-        print threshold
+  # convert strong to cascade, if necessary
+  if not isinstance(strong, list):
+    strong = [strong]
+    if threshold is not None:
+      threshold = [threshold]
     
-    # obtain predictions
-    pred, predVals = cascadePred(sampleSet, strong, threshold)
-  # if single strong classifier given as input  
-  else:
-    pred, predVals = strongPred(sampleSet, strong, threshold)
+  # obtain predictions
+  pred, predVals = cascadePred(sampleSet, strong, threshold)
     
   maxId = predVals.idxmax()
   numDetections = pred.sum()
@@ -333,7 +326,7 @@ def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_ey
   calcIntImage(trainingSet)
   
   return trainingSet
-  
+
   
 def calcIntImage(trainingSet):
   """
@@ -509,7 +502,7 @@ def updateWeights(weights, correct, beta):
   return weights
 
   
-def adaBoost(patchSet, numFeatures, strong = False):
+def adaBoost(patchSet, numFeatures, strong = None):
   """
   Input: patchSet with columns 0, 1
          numFeatures = number of features desired in strong classifier
@@ -517,7 +510,7 @@ def adaBoost(patchSet, numFeatures, strong = False):
   Output: Strong classifier information in a DataFrame
           last set of weights (can input into later runs to start adaBoost where previous run left off)
   """
-  if not strong:
+  if strong is None:
     # initialize weights
     weights = Series(np.ones(len(patchSet)))
     weights[patchSet[0]==1] = weights[patchSet[0]==1] / (2 * patchSet[0].sum())
@@ -623,22 +616,23 @@ def findThreshold(patchSet, strong, minDetectionRate):
   threshold = strong['alpha'].sum()
   
   numSuccesses = 0
-  spacingChange = {0: 10, 1: 1, 2: 0.1, 3: 0.01}
+  spacingChange = {0: 5, 1: 1, 2: 0.5, 3: 0.1, 4: 0.05, 5: 0.01}
   
   flag = True
   
   while flag:
     report = strongReport(patchSet, strong, threshold)
+    
     if report['detect_rate'] < minDetectionRate:
       threshold -= spacingChange[numSuccesses]
-    elif numSuccesses == 3:
-      print strongReport(patchSet, strong, threshold)
-      return threshold
     else:
-      threshold += spacingChange[numSuccesses]
       numSuccesses += 1
-      
-      
+      if numSuccesses == len(spacingChange):
+        print strongReport(patchSet, strong, threshold)
+        return threshold
+      threshold += spacingChange[numSuccesses-1] - spacingChange[numSuccesses]
+
+  
 def getWeights(patchSet, strong):
   """
   Returns adaBoost weights on samples in patchSet after using strong classifier
@@ -700,7 +694,7 @@ def runStrong(patchSet, strong):
   return predVals
 
 
-def strongReport(patchSet, strong, threshold = False):
+def strongReport(patchSet, strong, threshold = None):
   """
   Runs strong classifier on set of patches and returns error rate, detection rate, and false positive rate
   Input: patchSet = DataFrame of patches
@@ -708,8 +702,8 @@ def strongReport(patchSet, strong, threshold = False):
          threshold = custom threshold for strong classifier (default will be 1/2 sum of alpha values)
   Output: Series containing error, detect_rate, and false_positive_rate
   """
-  # if threshold is False, set threshold to default (1/2 sum of alpha values)
-  if not threshold:
+  # if threshold is None, set threshold to default (1/2 sum of alpha values)
+  if threshold is None:
     threshold = strong['alpha'].sum() / 2
     print 'Testing with default threshold %f' % threshold
     
@@ -731,7 +725,7 @@ def strongReport(patchSet, strong, threshold = False):
   return Series({'error': error, 'detect_rate': detect, 'false_positive_rate': falsePos})
   
   
-def strongPred(patchSet, strong, threshold = False):
+def strongPred(patchSet, strong, threshold = None):
   """
   Runs strong classifier on set of patches and returns predictions and highest scoring sample
   Input: patchSet = DataFrame of patches
@@ -740,8 +734,8 @@ def strongPred(patchSet, strong, threshold = False):
   Output: Series of bools containing predictions, id value of highest scoring sample
   """
   
-  # if threshold is False, set threshold to default (1/2 sum of alpha values)
-  if not threshold:
+  # if threshold is None, set threshold to default (1/2 sum of alpha values)
+  if threshold is None:
     threshold = strong['alpha'].sum() / 2
     print 'Testing with default threshold %f' % threshold
   
@@ -753,7 +747,7 @@ def strongPred(patchSet, strong, threshold = False):
 
 
   
-def cascadePred(patchSet, cascade, thresholds = False):
+def cascadePred(patchSet, cascade, thresholds = None):
   """
   Runs cascade of strong classifiers and returns predictions on patchSet
   Input: patchSet = DataFrame of patches
@@ -761,8 +755,8 @@ def cascadePred(patchSet, cascade, thresholds = False):
          thresholds = list of threshold values
   Output: predictions by cascade and highest scoring sample
   """
-  # if thresholds is False, set to default
-  if not thresholds:
+  # if thresholds is None, set to default
+  if thresholds is None:
     thresholds = []
     for strong in cascade:
       thresholds.append(strong['alpha'].sum() / 2)
@@ -785,7 +779,7 @@ def cascadePred(patchSet, cascade, thresholds = False):
   return pred, predVals
 
   
-def cascadeReport(patchSet, cascade, thresholds = False):
+def cascadeReport(patchSet, cascade, thresholds = None):
   """
   Runs cascade of strong classifiers and returns error rate, detection rate, and false positive rate
   Input: patchSet = DataFrame of patches
@@ -793,8 +787,8 @@ def cascadeReport(patchSet, cascade, thresholds = False):
          thresholds = list of threshold values
   Output: Series containing error, detection_rate, and false_positive_rate
   """
-  # if thresholds is False, set to default
-  if not thresholds:
+  # if thresholds is None, set to default
+  if thresholds is None:
     thresholds = []
     for strong in cascade:
       thresholds.append(strong['alpha'].sum() / 2)
@@ -818,7 +812,7 @@ def cascadeReport(patchSet, cascade, thresholds = False):
   return Series({'error': error, 'detection_rate': detectRate, 'false_positive_rate': falsePosRate})
   
   
-def predPatch(patch, cascade, thresholds = False):
+def predPatch(patch, cascade, thresholds = None):
   """
   Input: patch = numpy array containing pixel values
          cascade = strong classifier DataFrame with columns feature, parity, threshold, and alpha
@@ -829,11 +823,11 @@ def predPatch(patch, cascade, thresholds = False):
   if not isinstance(cascade, list):
     cascade = [cascade]
     
-    if thresholds:
+    if thresholds is not None:
       thresholds = [thresholds]
   
-  # if thresholds is False, set to defaults
-  if not isinstance(thresholds,list):
+  # if thresholds is None, set to defaults
+  if thresholds is None:
     thresholds = []
     for strong in cascade:
       thresholds.append(strong['alpha'].sum() / 2)
@@ -853,7 +847,7 @@ def predPatch(patch, cascade, thresholds = False):
       return False
   
   return True
-
+  
 
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
 nameDict = {0: '12', 1: '21', 2: '13', 3: '31', 4: '22'}
