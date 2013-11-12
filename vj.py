@@ -6,6 +6,7 @@ import face
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import math
+import UnionFind as UF
 
 
 def initialize(keypoint = 'left_eye_center'):
@@ -217,7 +218,7 @@ def calcFeatureValues(patchSet):
   
 ################################################################
 
-def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_eye_center', numWithout = 1):
+def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_eye_center', numWithout = 1, maxTries = 100):
   """
   Input: data = training data with columns 'Image' and location of keypoint
          strong = single or cascade (list) of strong classifier DataFrames (new patches will only be selected if they test positive)
@@ -253,51 +254,67 @@ def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_ey
         if not strong:
           patchCenterX = random.randint(patchRadius,95-patchRadius)
           patchCenterY = random.randint(patchRadius,95-patchRadius)
+          imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
+          patchList.append(imageDict)
+          keypointYes.append(0)
+          keypointNo.append(1) 
         # if strong classifier, select patch that is classified positive by the strong classifier
         else:
           flag = True
+          numTries = 0
           
           while flag:
             patchCenterX = random.randint(patchRadius,95-patchRadius)
             patchCenterY = random.randint(patchRadius,95-patchRadius)
             patch = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
             if predPatch(patch, strong, threshold):
+              imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
+              patchList.append(imageDict)
+              keypointYes.append(0)
+              keypointNo.append(1)   
               flag = False
-        imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
-        patchList.append(imageDict)
-        keypointYes.append(0)
-        keypointNo.append(1)    
+            elif numTries > maxTries:
+              flag = False
+            numTries += 1
+         
       continue
     
-    # if feature location is present, record patches that do not contain feature
+    # if keypoint location is present, record patches that do not contain keypoint
     for i in range(numWithout):
       # if no strong classifier, select patch so that it does not contain keypoint
       if not strong:
         contained = True
         
-        # ensure that patch does not contain feature
+        # ensure that patch does not contain keypoint
         while contained:
           patchCenterX = random.randint(patchRadius,95-patchRadius)
           patchCenterY = random.randint(patchRadius,95-patchRadius)
           if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
+            imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
+            patchList.append(imageDict)
+            keypointNo.append(1)
+            keypointYes.append(0)
             contained = False
       # if strong classifier, select patch so that it does not contain keypoint and is classified positive by strong classifier
       else:
         flag = True
+        numTries = 0
         while flag:
           patchCenterX = random.randint(patchRadius,95-patchRadius)
           patchCenterY = random.randint(patchRadius,95-patchRadius)
           if (patchCenterX < int(keypointLocX - patchRadius) or patchCenterX > int(keypointLocX + patchRadius)) and (patchCenterY < int(keypointLocY - patchRadius) or patchCenterY > int(keypointLocY + patchRadius)):
             patch = data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]
             if predPatch(patch, strong, threshold):
+              imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
+              patchList.append(imageDict)
+              keypointNo.append(1)
+              keypointYes.append(0)
               flag = False
-      
-      imageDict = {'Patch': data['Image'][sample][patchCenterY - patchRadius:patchCenterY + patchRadius, patchCenterX - patchRadius:patchCenterX + patchRadius]}
-      patchList.append(imageDict)
-      keypointNo.append(1)
-      keypointYes.append(0)
+            elif numTries > maxTries:
+              flag = False
+            numTries += 1
     
-    # report if feature location is too close to boundary
+    # report if keypoint location is too close to boundary
     if keypointLocX < patchRadius:
       print 'Sample %s is too close to left boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
       continue
@@ -311,7 +328,7 @@ def trainingPatches(data, strong = False, threshold = False, keypoint = 'left_ey
       print 'Sample %s is too close to bottom boundary at (%d,%d)' % (sample, keypointLocX, keypointLocY)
       continue
   
-    # if feature is not too close to boundary, record patch containing feature
+    # if keypoint is not too close to boundary, record patch containing keypoint
     imageDict = {'Patch': data['Image'][sample][keypointLocY - patchRadius:keypointLocY + patchRadius, keypointLocX - patchRadius:keypointLocX + patchRadius]}
     patchList.append(imageDict)
     keypointYes.append(1)
@@ -847,6 +864,169 @@ def predPatch(patch, cascade, thresholds = None):
       return False
   
   return True
+
+  
+def trainingPatches2(data, keypoint1 = 'left_eye_center', keypoint2 = 'right_eye_center'):
+  """
+  Variant of trainingPatches() that creates a patch set consisting of patches centered at keypoint1 and patches centered at keypoint2
+  Input: data = training data with columns 'Image' and location of keypoint
+         keypoint1 = facial keypoint you are trying to classify
+         keypoint2 = second facial keypoint that you are not trying to classify
+  Output: 4-column DataFrame of patches
+    Patch: contains square patches (side length = 2 * patchRadius) as a numpy array
+    1: a 1 in this column means facial keypoint present in patch (0 otherwise)
+    0: a 1 in this column means facial keypoint not present (0 otherwise)
+    IntImage: integral image of patches
+  Does not record patches containing a keypoint if the keypoint is too close (within patchRadius) to the boundary of image or sample has no keypoint information
+  """
+
+  # will become the columns of the returned DataFrame
+  patchList = []
+  keypointYes = []
+  keypointNo = []
+  
+  for sample in data.index:
+  
+    # extract keypoint locations
+    keypoint1LocX = data[keypoint1 + '_x'][sample]
+    keypoint1LocY = data[keypoint1 + '_y'][sample]
+    
+    keypoint2LocX = data[keypoint2 + '_x'][sample]
+    keypoint2LocY = data[keypoint2 + '_y'][sample]
+    
+    # if keypoint1 location is not present, report
+    if np.isnan(keypoint1LocX) or np.isnan(keypoint1LocY):
+      print 'Sample %s does not have %s data' % (sample, keypoint1) 
+    # report if keypoint1 location is too close to boundary
+    elif keypoint1LocX < patchRadius:
+      print 'Keypoint %s of sample %d is too close to left boundary at (%d,%d)' % (keypoint1, sample, keypoint1LocX, keypoint1LocY)
+    elif keypoint1LocX > 95-patchRadius:
+      print 'Keypoint %s of sample %d is too close to right boundary at (%d,%d)' % (keypoint1, sample, keypoint1LocX, keypoint1LocY)
+    elif keypoint1LocY < patchRadius:
+      print 'Keypoint %s of sample %d is too close to top boundary at (%d,%d)' % (keypoint1, sample, keypoint1LocX, keypoint1LocY)
+    elif keypoint1LocY > 95-patchRadius:
+      print 'Keypoint %s of sample %d is too close to bottom boundary at (%d,%d)' % (keypoint1, sample, keypoint1LocX, keypoint1LocY)
+    else:
+      # if keypoint1 is not too close to boundary, record patch containing keypoint1
+      imageDict = {'Patch': data['Image'][sample][keypoint1LocY - patchRadius:keypoint1LocY + patchRadius, keypoint1LocX - patchRadius:keypoint1LocX + patchRadius]}
+      patchList.append(imageDict)
+      keypointYes.append(1)
+      keypointNo.append(0)
+      
+    # if keypoint2 location is not present, report
+    if np.isnan(keypoint2LocX) or np.isnan(keypoint2LocY):
+      print 'Sample %s does not have %s data' % (sample, keypoint2) 
+    # report if keypoint2 location is too close to boundary
+    elif keypoint2LocX < patchRadius:
+      print 'Keypoint %s of sample %d is too close to left boundary at (%d,%d)' % (keypoint2, sample, keypoint2LocX, keypoint2LocY)
+    elif keypoint2LocX > 95-patchRadius:
+      print 'Keypoint %s of sample %d is too close to right boundary at (%d,%d)' % (keypoint2, sample, keypoint2LocX, keypoint2LocY)
+    elif keypoint2LocY < patchRadius:
+      print 'Keypoint %s of sample %d is too close to top boundary at (%d,%d)' % (keypoint2, sample, keypoint2LocX, keypoint2LocY)
+    elif keypoint2LocY > 95-patchRadius:
+      print 'Keypoint %s of sample %d is too close to bottom boundary at (%d,%d)' % (keypoint2, sample, keypoint2LocX, keypoint2LocY)
+    else:
+      # if keypoint2 is not too close to boundary, record patch containing keypoint2
+      imageDict = {'Patch': data['Image'][sample][keypoint2LocY - patchRadius:keypoint2LocY + patchRadius, keypoint2LocX - patchRadius:keypoint2LocX + patchRadius]}
+      patchList.append(imageDict)
+      keypointYes.append(0)
+      keypointNo.append(1)
+
+  # combine lists into a single DataFrame
+  trainingSet = DataFrame(patchList)
+  trainingSet[1] = keypointYes
+  trainingSet[0] = keypointNo
+  
+  # calculate integral images
+  calcIntImage(trainingSet)
+  
+  return trainingSet
+
+    
+def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
+  """
+  Predicts location of keypoint using center of top-right cluster (that contains at least 1/10 of positives from cascade)
+  Inputs: image: pixel values in numpy array
+          cascade: list of strong classifiers
+          thresholds: list of threshold values
+          distance: max spacing of clustering (default = 5)
+  Output: Graphs predicted location of left-eye keypoint  
+  """
+  # obtain subwindows from image
+  sampleSet = getSubwindows(image)
+
+  # convert single strong classifier to a cascade, if necessary
+  if not isinstance(cascade, list):
+    cascade = [cascade]
+    if thresholds is not None:
+      thresholds = [thresholds]
+    
+  # obtain predictions from cascade
+  pred, _ = cascadePred(sampleSet, cascade, thresholds)
+  
+  # obtain index values of locations that have tested positive
+  predIndex = sampleSet[pred == True].index
+  
+  # edgeList consist of tuples of the form (Euclidean distance between point i and point j, i, j)
+  prevIndex = []
+  edgeList = []
+  
+  for i in predIndex:
+    prevIndex.append(i)
+    for j in predIndex.diff(prevIndex):
+      edgeList.append((np.linalg.norm(sampleSet.ix[i,['x','y']] - sampleSet.ix[j,['x','y']]), i, j))
+
+  # sort edgeList by edge length
+  edgeList.sort(key = lambda x: x[0])
+
+  # create union find class that contains all positive locations
+  uf = UF.UnionFind(predIndex)
+  
+  # union points together until edge length exceeds maxSpace
+  for edge in edgeList:
+    if edge[0] > maxSpace:
+      break  
+    uf.union(edge[1],edge[2])
+
+  # obtain list of clusters that contain at least 1/minClusterFrac of the positive locations
+  parentTable = Series(uf.parent)
+  parentVals = parentTable.value_counts()
+  parents = parentVals[parentVals > (len(predIndex)/minClusterFrac)].index
+  
+  # plot image and positive locations in blue
+  plt.imshow(image, cmap=cm.Greys_r)
+  
+  for i in sampleSet[pred == True].index:
+    plt.scatter(sampleSet['x'][i], sampleSet['y'][i], color = 'blue')
+  
+  # obtain the center of each cluster and measure its distance to the top-left corner
+  centers = DataFrame(index = parents, columns = ['x','y'])
+  
+  for parent in parents: 
+    centers.ix[parent] = sampleSet.ix[parentTable[parentTable == parent].index, ['x','y']].mean()
+    
+  centers['topLeft'] = (96 - centers['x'])**2 + centers['y']**2
+  centers = centers.astype(float)
+  
+  # predict location of left eye is the center of teh top-leftmost cluster, plot in red
+  leftEyePred = centers['topLeft'].idxmin()
+  
+  plt.scatter(centers['x'][leftEyePred], centers['y'][leftEyePred], color = 'red') 
+  
+  
+def loadCascade(numStrong):
+  """
+  Loads cascade and thresholds from storage.h5
+  """
+  store = pd.HDFStore('storage.h5')
+  thresholds = store['thresholds']
+  
+  cascade = []
+  
+  for i in xrange(numStrong):
+    cascade.append(store['strong' + str(i)])
+  
+  return thresholds, cascade
   
 
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
