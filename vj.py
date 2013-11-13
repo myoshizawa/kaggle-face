@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import math
 import UnionFind as UF
+import heapq as hp
 
 
 def initialize(keypoint = 'left_eye_center'):
@@ -130,9 +131,8 @@ def visualizePred(image, strong, threshold = None):
       threshold = [threshold]
     
   # obtain predictions
-  pred, predVals = cascadePred(sampleSet, strong, threshold)
+  pred = cascadePred(sampleSet, strong, threshold)
     
-  maxId = predVals.idxmax()
   numDetections = pred.sum()
   numSamples = len(sampleSet)
   
@@ -143,8 +143,6 @@ def visualizePred(image, strong, threshold = None):
   
   for i in sampleSet[pred == True].index:
     plt.scatter(sampleSet['x'][i], sampleSet['y'][i], color = 'blue')
-  
-  plt.scatter(sampleSet['x'][maxId],sampleSet['y'][maxId], color = 'red')
 
   
 def visualizeFeature(patchSet, type, x1, y1, x2, y2):
@@ -589,7 +587,7 @@ def adaBoost(patchSet, numFeatures, strong = None):
     
   return strong
   
-def getSubwindows(image):
+def getSubwindows(image, spacing = 1):
   """
   Input: pixel values of image as numpy array
   Output: DataFrame containing all patches of size patchRadius (global var), center of patch, and their integral images
@@ -601,8 +599,8 @@ def getSubwindows(image):
   imageLength = len(image)
   
   # add patches to list
-  for i in xrange(patchRadius, imageLength - patchRadius):
-    for j in xrange(patchRadius, imageLength - patchRadius):
+  for i in xrange(patchRadius, imageLength - patchRadius, spacing):
+    for j in xrange(patchRadius, imageLength - patchRadius, spacing):
       imageDict = {}
       
       imageDict['Patch'] = image[j-patchRadius:j+patchRadius,i-patchRadius:i+patchRadius]
@@ -690,7 +688,6 @@ def runStrong(patchSet, strong):
          strong DataFrame with alpha, feature, parity, threshold columns
          threshold = custom threshold for strong classifier (defaults to threshold = 1/2 sum of alpha values)
   Output: error, detection rate, and false positive rate of strong classifier
-  Running time: 1.1 s
   """
   
   predVals = Series(np.zeros(len(patchSet)), index = patchSet.index)
@@ -748,7 +745,7 @@ def strongPred(patchSet, strong, threshold = None):
   Input: patchSet = DataFrame of patches
          strong = strong classifier DataFrame
          threshold = custom threshold for strong classifier (default will be 1/2 sum of alpha values)
-  Output: Series of bools containing predictions, id value of highest scoring sample
+  Output: Series of bools containing predictions, values given by strong classifier
   """
   
   # if threshold is None, set threshold to default (1/2 sum of alpha values)
@@ -760,7 +757,7 @@ def strongPred(patchSet, strong, threshold = None):
   predVals = runStrong(patchSet, strong)
   
   # return bool of predictions and value of highest scoring prediction
-  return predVals > threshold, predVals
+  return predVals >= threshold
 
 
   
@@ -781,19 +778,13 @@ def cascadePred(patchSet, cascade, thresholds = None):
   # patches to be tested by subsequent classifier
   remainingPatches = patchSet
   
-  # records the score given by strong classifier
-  predVals = Series(np.zeros(len(patchSet)), index = patchSet.index)
-  
   # each strong classifier makes predictions, update scores, repeat only on positive predictions
   for i in xrange(len(cascade)):
-    classifiedYes, vals = strongPred(remainingPatches, cascade[i], thresholds[i])
-    predVals = predVals.add(vals, fill_value = 0)
+    classifiedYes = strongPred(remainingPatches, cascade[i], thresholds[i])
     remainingPatches = remainingPatches.ix[classifiedYes]
   
   # positive predictions are the remaining patches
-  pred = patchSet.index.isin(remainingPatches.index)
-    
-  return pred, predVals
+  return Series(patchSet.index.isin(remainingPatches.index))
 
   
 def cascadeReport(patchSet, cascade, thresholds = None):
@@ -815,7 +806,7 @@ def cascadeReport(patchSet, cascade, thresholds = None):
   
   # each strong classifier makes predictions, repeat only on positive predictions
   for i in xrange(len(cascade)):
-    classifiedYes, vals = strongPred(remainingPatches, cascade[i], thresholds[i])
+    classifiedYes = strongPred(remainingPatches, cascade[i], thresholds[i])
     remainingPatches = remainingPatches.ix[classifiedYes]
   
   # positive predictions are the remaining patches  
@@ -853,20 +844,24 @@ def predPatch(patch, cascade, thresholds = None):
   ii = integralImage(patch)
   
   for i in xrange(len(cascade)):
-    # determine feature values corresponding to weak classifiers
-    values = cascade[i]['feature'].apply(lambda x: featureTypes[x[0]](x[1], x[2], x[3], x[4], ii))
-    # make predictions for each weak classifier
-    predictions = values * cascade[i]['parity'] > cascade[i]['threshold'] * cascade[i]['parity']
-    # add up relevant alpha values
-    score = (cascade[i]['alpha'] * predictions).sum()
-    # return false if below threshold, else continue to next strong classifier
-    if score <= thresholds[i]:
+    weakSum = 0
+    for j in xrange(len(cascade[i])):
+      type, x1, y1, x2, y2 = cascade[i]['feature'][j]
+      value = featureTypes[type](x1, y1, x2, y2, ii)
+      if cascade[i]['parity'][j] > 0:
+        if value > cascade[i]['threshold'][j]:
+          weakSum += cascade[i]['alpha'][j]
+      else:
+        if value < cascade[i]['threshold'][j]:
+          weakSum += cascade[i]['alpha'][j]
+    if weakSum < thresholds[i]:
       return False
-  
+      
   return True
 
+
   
-def trainingPatches2(data, keypoint1 = 'left_eye_center', keypoint2 = 'right_eye_center'):
+def trainingPatches2(data, keypoint1 = 'left_eye_center', keypoint2 = 'right_eye_center', fudge = (0,0)):
   """
   Variant of trainingPatches() that creates a patch set consisting of patches centered at keypoint1 and patches centered at keypoint2
   Input: data = training data with columns 'Image' and location of keypoint
@@ -891,8 +886,8 @@ def trainingPatches2(data, keypoint1 = 'left_eye_center', keypoint2 = 'right_eye
     keypoint1LocX = data[keypoint1 + '_x'][sample]
     keypoint1LocY = data[keypoint1 + '_y'][sample]
     
-    keypoint2LocX = data[keypoint2 + '_x'][sample]
-    keypoint2LocY = data[keypoint2 + '_y'][sample]
+    keypoint2LocX = data[keypoint2 + '_x'][sample] + fudge[0]
+    keypoint2LocY = data[keypoint2 + '_y'][sample] + fudge[1]
     
     # if keypoint1 location is not present, report
     if np.isnan(keypoint1LocX) or np.isnan(keypoint1LocY):
@@ -943,7 +938,7 @@ def trainingPatches2(data, keypoint1 = 'left_eye_center', keypoint2 = 'right_eye
   return trainingSet
 
     
-def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
+def clusterPred(image, cascade, thresholds, maxSpace = 4, minClusterFrac = 10, keypoint = 'left_eye_center'):
   """
   Predicts location of keypoint using center of top-right cluster (that contains at least 1/10 of positives from cascade)
   Inputs: image: pixel values in numpy array
@@ -953,7 +948,7 @@ def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
   Output: Graphs predicted location of left-eye keypoint  
   """
   # obtain subwindows from image
-  sampleSet = getSubwindows(image)
+  sampleSet = getSubwindows(image, spacing = 2)
 
   # convert single strong classifier to a cascade, if necessary
   if not isinstance(cascade, list):
@@ -962,7 +957,7 @@ def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
       thresholds = [thresholds]
     
   # obtain predictions from cascade
-  pred, _ = cascadePred(sampleSet, cascade, thresholds)
+  pred = cascadePred(sampleSet, cascade, thresholds)
   
   # obtain index values of locations that have tested positive
   predIndex = sampleSet[pred == True].index
@@ -974,18 +969,16 @@ def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
   for i in predIndex:
     prevIndex.append(i)
     for j in predIndex.diff(prevIndex):
-      edgeList.append((np.linalg.norm(sampleSet.ix[i,['x','y']] - sampleSet.ix[j,['x','y']]), i, j))
-
-  # sort edgeList by edge length
-  edgeList.sort(key = lambda x: x[0])
+      if j <= i + len(image) * maxSpace:
+        distance = np.linalg.norm(sampleSet.ix[i,['x','y']] - sampleSet.ix[j,['x','y']])
+        if distance <= maxSpace:
+          edgeList.append((distance, i, j))
 
   # create union find class that contains all positive locations
   uf = UF.UnionFind(predIndex)
   
   # union points together until edge length exceeds maxSpace
   for edge in edgeList:
-    if edge[0] > maxSpace:
-      break  
     uf.union(edge[1],edge[2])
 
   # obtain list of clusters that contain at least 1/minClusterFrac of the positive locations
@@ -993,11 +986,13 @@ def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
   parentVals = parentTable.value_counts()
   parents = parentVals[parentVals > (len(predIndex)/minClusterFrac)].index
   
+  """
   # plot image and positive locations in blue
   plt.imshow(image, cmap=cm.Greys_r)
   
   for i in sampleSet[pred == True].index:
     plt.scatter(sampleSet['x'][i], sampleSet['y'][i], color = 'blue')
+  """
   
   # obtain the center of each cluster and measure its distance to the top-left corner
   centers = DataFrame(index = parents, columns = ['x','y'])
@@ -1011,7 +1006,9 @@ def clusterPred(image, cascade, thresholds, maxSpace = 5, minClusterFrac = 10):
   # predict location of left eye is the center of teh top-leftmost cluster, plot in red
   leftEyePred = centers['topLeft'].idxmin()
   
-  plt.scatter(centers['x'][leftEyePred], centers['y'][leftEyePred], color = 'red') 
+  # plt.scatter(centers['x'][leftEyePred], centers['y'][leftEyePred], color = 'red') 
+  
+  return Series({keypoint + '_x': centers['x'][leftEyePred], keypoint + '_y': centers['y'][leftEyePred]})
   
   
 def loadCascade(numStrong):
@@ -1027,6 +1024,23 @@ def loadCascade(numStrong):
     cascade.append(store['strong' + str(i)])
   
   return thresholds, cascade
+  
+  
+  
+def evalPred(train, cascade, thresholds, keypoint = 'left_eye_center'):
+  """
+  Predicts the location of keypoint based on clusterPred() and computes RMSE
+  Inputs: train: training data DataFrame
+          cascade: list of strong classifiers
+          thresholds: list of threshold values
+  """
+
+  pred = train['Image'].apply(lambda x: clusterPred(x, cascade, thresholds))
+
+  actual = train[[keypoint + '_x', keypoint + '_y']]
+  
+  return math.sqrt(((actual - pred)**2).sum().sum() / (2 * len(actual)))
+
   
 
 featureTypes = {12: feature12, 21: feature21, 13: feature13, 31: feature31, 22: feature22}
